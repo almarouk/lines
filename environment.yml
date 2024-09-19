@@ -1,0 +1,11 @@
+name: line_detection
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # - autopep8
+  # - pylint
+  - pytorch
+  - pytorch-cuda
+  - torchvision
+  - opencv
