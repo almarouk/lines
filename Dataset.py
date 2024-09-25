@@ -17,30 +17,33 @@ class BoxesDataset:
         self._batch_size = batch_size
         self._max_distance = max_distance
         self._num_workers = num_workers
-        self._files_in = {}
-        self._files_out = {}
+        self._files = {}
         self._init()
 
     def _init(self):
         for split, scene_ids in self._scene_ids.items():
-            files_in = self._files_in[split] = []
-            files_out = self._files_out[split] = []
+            split_files = self._files[split] = []
             for id in scene_ids:
+                scene_files = {}
                 scene_path = os.path.join(self._rootpath, str(id))
                 _, _, filenames = next(os.walk(scene_path))
                 for filename in filenames:
-                    suffix = os.path.splitext(filename)[0].split('_')[-1]
+                    view_id, _, suffix = os.path.splitext(filename)[0].rpartition('_')
+                    view_files = scene_files.get(view_id, None)
+                    if not view_files:
+                        view_files = scene_files[view_id] = [''] * 2
                     if suffix == "beauty":
-                        files_in.append(os.path.join(scene_path, filename))
+                        view_files[0] = os.path.join(scene_path, filename)
                     elif suffix == "wireframe":
-                        files_out.append(os.path.join(scene_path, filename))
+                        view_files[1] = os.path.join(scene_path, filename)
+                split_files.extend(scene_files.values())
 
     def get_data_loader(self, split) -> DataLoader:
         assert split in self._scene_ids
         # TODO replace list of string by numpy array in case of multiple workers
         # See https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
         return DataLoader(
-            dataset=_Dataset(self._files_in[split], self._files_out[split], self._max_distance),
+            dataset=_Dataset(self._files[split], self._max_distance),
             batch_size=self._batch_size,
             shuffle=split == "train",
             num_workers=self._num_workers,
@@ -52,11 +55,9 @@ class BoxesDataset:
         )
 
 class _Dataset(Dataset):
-    def __init__(self, files_in: list[str], files_out: list[str], max_distance: float):
+    def __init__(self, files: list[str], max_distance: float):
         super().__init__()
-        assert len(files_in) == len(files_out)
-        self._files_in = files_in
-        self._files_out = files_out
+        self._files = files
         self._max_distance = max_distance
         self._init()
 
@@ -68,9 +69,9 @@ class _Dataset(Dataset):
     def __getitem__(self, index) -> dict[str, Tensor]:
         # IMREAD_UNCHANGED to read alpha channel
         flags = cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED
-        img_in = cv2.imread(self._files_in[index], flags)
+        img_in = cv2.imread(self._files[index][0], flags)
         # line information is saved in alpha channel
-        img_out = cv2.imread(self._files_out[index], flags)[..., -1]
+        img_out = cv2.imread(self._files[index][1], flags)[..., -1]
 
         # crop image
         crop_factor = 0.25
@@ -102,4 +103,4 @@ class _Dataset(Dataset):
     
     @override
     def __len__(self) -> int:
-        return len(self._files_in)
+        return len(self._files)
