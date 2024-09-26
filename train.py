@@ -78,7 +78,7 @@ def remove_old_ckpts(args: Namespace):
     ckpts_filtered = sorted([int(x.groups()[0]) for x in ckpts_filtered if x is not None])
     if len(ckpts_filtered) > args.keep_last_ckpts:
         for ckpt in ckpts_filtered[:-args.keep_last_ckpts]:
-            os.remove(os.path.join(args.output_path, f"ckpt_{ckpt}.tar"))
+            os.remove(os.path.join(args.output_path, f"ckpt_{ckpt:04d}.tar"))
 
 def do_validation(
         args: Namespace,
@@ -158,7 +158,7 @@ def do_training(args: Namespace) -> None:
                         best_val=best_val)
                 # torch.cuda.empty_cache()
 
-            if epoch % args.ckpt_every_epochs == 0 or epoch == args.epoch:
+            if epoch % args.ckpt_every_epochs == 0 or epoch == args.epochs:
                 ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}.tar")
                 save_training(
                     ckpt_path=ckpt_path,

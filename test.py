@@ -52,8 +52,8 @@ def run(args: Namespace) -> None:
         images = images.transpose((0, 2, 3, 1))
         for i in range(len(images)):
             image = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
-            ground_truth = ground_truths[i] / max_distance
-            prediction = predictions[i] / max_distance
+            ground_truth = ground_truths[i] * 255 / max_distance
+            prediction = predictions[i] * 255 / max_distance
             cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_img.exr"), image)
             cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_gt.png"), ground_truth)
             cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_pred.png"), prediction)
