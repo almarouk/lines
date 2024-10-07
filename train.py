@@ -179,6 +179,8 @@ if __name__ == '__main__':
     # - add configuration support
     # - add stop signal handling
     # - add AMP training (Automatic Mixed Precision)
+    # - log normalized loss relative to max_distance (for comparability)
+    # - Tensorboard
 
     parser = ArgumentParser()
 
