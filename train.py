@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
+    from utils import DATA
     from torch.optim.optimizer import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
     from torch.nn import Module
@@ -16,7 +17,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 from Dataset import BoxesDataset
 from Model import LineDetector
-from utils import DATA, to_device, set_seed, initiate_reproducibility
+from utils import to_device, set_seed, initiate_reproducibility
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -121,10 +122,10 @@ def main(args: Namespace) -> None:
         initiate_reproducibility()
 
     best_val = float("inf")
-    dataset = get_dataset(**args)
+    dataset = get_dataset(**vars(args))
     train_loader = dataset.get_data_loader('train', debug=args.debug)
     val_loader = dataset.get_data_loader('val')
-    model = get_model(**args)
+    model = get_model(**vars(args))
     loss_fn = get_loss_fn(args.loss)()
     device = 'cuda' if is_torch_cuda_available() else 'cpu'
     model = model.to(device, non_blocking=True)
@@ -164,7 +165,7 @@ def main(args: Namespace) -> None:
         model.train()
         with profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=schedule(skip_first=10, wait=0, warmup=3, active=5, repeat=1),
+            schedule=schedule(skip_first=3, wait=0, warmup=3, active=5, repeat=1),
             on_trace_ready=tensorboard_trace_handler(tb_path),
             record_shapes=True,
             profile_memory=True,
@@ -174,7 +175,7 @@ def main(args: Namespace) -> None:
                 optimizer.zero_grad()
                 data = to_device(data, device)
                 if args.debug and global_batch_index == 0:
-                    writer.add_graph(model, data)
+                    writer.add_graph(model, data['tensor_in'])
                 preds = model(data['tensor_in'])
                 loss: Tensor = loss_fn(preds, data['tensor_out'])
                 loss.backward()

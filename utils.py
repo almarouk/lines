@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
-    from torch import Tensor
     # defined only for type hinting in IDE
     DATA = TypedDict("DATA", {
         "tensor_in": Tensor,
@@ -20,9 +19,10 @@ if TYPE_CHECKING:
 import random
 import numpy as np
 import torch
+from torch import Tensor
 
 def to_device(data: DATA, device: str) -> DATA:
-    return {k: v.to(device, non_blocking=True) if v is Tensor else v for k, v in data.items()}
+    return {k: v.to(device, non_blocking=True) if isinstance(v, Tensor) else v for k, v in data.items()}
 
 def set_seed(seed: int) -> None:
     random.seed(seed)

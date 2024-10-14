@@ -1,8 +1,7 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 if TYPE_CHECKING:
-    from typing import override
     from utils import DATA
 
 import torch
@@ -26,7 +25,7 @@ class BoxesDataset:
     def __init__(self, data_path: str, to_sdr: bool, max_distance: float, batch_size: int, num_workers: int = 0):
         super().__init__()
         self._rootpath = data_path
-        self.to_sdr = to_sdr
+        self._to_sdr = to_sdr
         self._max_distance = max_distance
         self._batch_size = batch_size
         self._num_workers = num_workers
@@ -74,7 +73,7 @@ class BoxesDataset:
             collate_fn=collate_wrapper,
             # to reduce worker creation overhead, especially on Windows where 'spawn' method
             # is used in contrast with 'fork' method on Linux to create worker processes
-            persistent_workers=True
+            persistent_workers=is_train and self._num_workers > 0
         )
 
 def worker_init_fn(worker_id: int):
@@ -121,9 +120,9 @@ class _Dataset(Dataset):
         self.preprocess = v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         if self._augment:
             self.transforms_augment = v2.RandomOrder([
-                v2.RandomApply(ModuleList([
-                    v2.JPEG((5, 50))
-                ]), p=.5),
+                # v2.RandomApply(ModuleList([
+                #     v2.JPEG((5, 50))
+                # ]), p=.5),
                 v2.RandomApply(ModuleList([
                     v2.ColorJitter(brightness=.3, hue=.2)
                 ]), p=.2),
@@ -131,7 +130,7 @@ class _Dataset(Dataset):
                     v2.GaussianBlur(kernel_size=(5, 9), sigma=(.1, 5.))
                 ]), p=.5),
                 v2.RandomApply(ModuleList([
-                    v2.GaussianNoise(mean=0., std=0.1)
+                    v2.GaussianNoise(mean=0., sigma=0.1)
                 ]), p=.2),
                 v2.RandomInvert(p=.2),
                 v2.RandomAutocontrast(p=.2),
@@ -146,7 +145,7 @@ class _Dataset(Dataset):
         flags = cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED
         filepath_in = os.path.join(self._root_path, self._files[index][0])
         filepath_out = os.path.join(self._root_path, self._files[index][1])
-        img_in = cv2.cvtColor(cv2.imread(filepath_in, flags), cv2.COLOR_BGR2RGB)
+        img_in = cv2.cvtColor(cv2.imread(filepath_in, flags), cv2.COLOR_BGRA2RGBA)
         # line information is saved in alpha channel
         img_out = cv2.imread(filepath_out, flags)[..., -1]
 
