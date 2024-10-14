@@ -28,11 +28,24 @@ from argparse import ArgumentParser
 import sys
 import glob
 import re
+from contextlib import nullcontext
 
-def get_dataset(data_path: str, to_sdr: bool, max_distance: float, batch_size: int, num_workers: int, **kwargs):
+def get_dataset(
+        data_path: str,
+        to_sdr: bool,
+        max_distance: float,
+        batch_size: int,
+        num_workers: int,
+        **kwargs
+    ) -> BoxesDataset:
     return BoxesDataset(data_path, to_sdr, max_distance, batch_size, num_workers)
 
-def get_model(size: int, max_distance: float, clamp_output: bool, **kwargs) -> Module:
+def get_model(
+        size: int,
+        max_distance: float,
+        clamp_output: bool,
+        **kwargs
+    ) -> Module:
     return LineDetector(size, max_distance, clamp_output)
 
 def get_loss_fn(loss: str) -> Module:
@@ -124,17 +137,21 @@ def main(args: Namespace) -> None:
 
     # initialize TensorBoard SummaryWriter
     writer : SummaryWriter | None = None
-    if args.tensorboard_summaries:
+    if args.debug:
         from torch.utils.tensorboard import SummaryWriter
 
-        tensorboard_path = os.path.join(args.output_path, "tensorboard")
-        os.makedirs(tensorboard_path, exist_ok=True)
-        writer = SummaryWriter(tensorboard_path)
+        tb_path = os.path.join(args.output_path, "tensorboard")
+        os.makedirs(tb_path, exist_ok=True)
+        writer = SummaryWriter(tb_path)
         writer.add_custom_scalars({
             "Loss": {
                 "Total Loss": ["Multiline", ["loss/train", "loss/val"]]
             }
         })
+    if args.profiling:
+        from torch.profiler import profile, schedule, tensorboard_trace_handler, ProfilerActivity
+        tb_path = os.path.join(args.output_path, "tensorboard")
+        os.makedirs(tb_path, exist_ok=True)
 
     # torch.backends.cudnn.benchmark = True
 
@@ -145,25 +162,35 @@ def main(args: Namespace) -> None:
         data: DATA
         set_seed(args.seed + epoch)
         model.train()
-        for data in train_loader:
-            optimizer.zero_grad()
-            data = to_device(data, device)
-            if global_batch_index == 0:
-                writer.add_graph(model, data)
-            preds = model(data['tensor_in'])
-            loss: Tensor = loss_fn(preds, data['tensor_out'])
-            loss.backward()
-            optimizer.step()
-            if writer:
-                if (global_batch_index + 1) % args.log_every_iters == 0:
-                    writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_batch_index)
-                    running_loss = 0.
-                else:
-                    running_loss += loss.item()
-            del preds, data, loss
-            global_batch_index += 1
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=schedule(skip_first=10, wait=0, warmup=3, active=5, repeat=1),
+            on_trace_ready=tensorboard_trace_handler(tb_path),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        ) if (args.profiling and epoch == 0) else nullcontext() as prof:
+            for data in train_loader:
+                optimizer.zero_grad()
+                data = to_device(data, device)
+                if args.debug and global_batch_index == 0:
+                    writer.add_graph(model, data)
+                preds = model(data['tensor_in'])
+                loss: Tensor = loss_fn(preds, data['tensor_out'])
+                loss.backward()
+                optimizer.step()
+                if args.debug:
+                    if (global_batch_index + 1) % args.log_every_iters == 0:
+                        writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_batch_index)
+                        running_loss = 0.
+                    else:
+                        running_loss += loss.item()
+                del preds, data, loss
+                global_batch_index += 1
+                if args.profiling and epoch == 0:
+                    prof.step()
 
-        if writer and (epoch + 1) % args.val_every_epochs == 0:
+        if args.debug and (epoch + 1) % args.val_every_epochs == 0:
             loss_val = do_validation(args, model, val_loader, device)
             writer.add_scalar("loss/val", loss_val, global_batch_index)
             if args.ckpt_best_val and loss_val <= best_val:
@@ -235,6 +262,7 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--seed", type=int, default=None)
     group.add_argument("--tag", type=str, default=None)
     group.add_argument("--debug", type=bool, default=False)
+    group.add_argument("--profiling", type=bool, default=False)
 
     return parser
 
