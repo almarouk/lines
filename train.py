@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch.optim.optimizer import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
@@ -7,31 +7,33 @@ if TYPE_CHECKING:
     from torch.utils.data import DataLoader
     # from torch.nn.modules.loss import _Loss
     from torch import Tensor
-    _DATA : TypeAlias = dict[str, Tensor]
+    from argparse import Namespace
+    from torch.utils.tensorboard import SummaryWriter
 
 import os
 # should be placed BEFORE importing opencv
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+
+from Dataset import BoxesDataset
+from Model import LineDetector
+from utils import DATA, to_device, set_seed, initiate_reproducibility
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim import Adam, SGD, RMSprop
 from torch.nn import L1Loss, MSELoss
 from torch.cuda import is_available as is_torch_cuda_available
-from Dataset import BoxesDataset
-from Model import LineDetector
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser
 # from pathlib import Path
 import sys
-from time import ctime
 import glob
 import re
 
-def get_dataset(data_path: str, batch_size: int, max_distance: float, num_workers: int):
-    return BoxesDataset(data_path, batch_size, max_distance, num_workers)
+def get_dataset(data_path: str, to_sdr: bool, max_distance: float, batch_size: int, num_workers: int, **kwargs):
+    return BoxesDataset(data_path, to_sdr, max_distance, batch_size, num_workers)
 
-def get_model(max_distance: float, clamp_output: bool) -> Module:
-    return LineDetector(max_distance, clamp_output)
+def get_model(size: int, max_distance: float, clamp_output: bool, **kwargs) -> Module:
+    return LineDetector(size, max_distance, clamp_output)
 
 def get_loss_fn(loss: str) -> Module:
     return {'l1': L1Loss, 'l2': MSELoss}[loss]
@@ -48,9 +50,6 @@ def get_scheduler(args: Namespace, optimizer: Optimizer) -> None | LRScheduler:
     else:
         sys.exit(f"Unrecognized option for argument scheduler: {args.scheduler}")
     return scheduler
-
-def to_device(data: _DATA, device: str) -> _DATA:
-    return {k: v.to(device, non_blocking=True) for k, v in data.items()}
 
 def save_training(
         ckpt_path: str,
@@ -80,33 +79,39 @@ def remove_old_ckpts(args: Namespace):
         for ckpt in ckpts_filtered[:-args.keep_last_ckpts]:
             os.remove(os.path.join(args.output_path, f"ckpt_{ckpt:04d}.tar"))
 
+@torch.no_grad()
 def do_validation(
         args: Namespace,
         model: Module,
         data_loader: DataLoader,
         device: str) -> float:
-    loss_fn = get_loss_fn(args.loss)(reduction='sum')
-    loss: Tensor = 0
+    MSELoss()
+    loss_fn = get_loss_fn(args.loss)(reduction='none')
+    running_loss: Tensor = 0
     num_samples: int = 0
     training = model.training
     if training:
         model.eval()
     for data in data_loader:
         data = to_device(data, device)
-        with torch.no_grad():
-            loss += loss_fn(model(data['in']), data['out'])
-            num_samples += len(data['in'])
-    loss /= num_samples
+        loss = loss_fn(model(data['tensor_in']), data['tensor_out'])
+        running_loss += torch.sum(torch.mean(loss, dim=list(range(1, loss.dim()))))
+        num_samples += len(data['tensor_in'])
+    running_loss /= num_samples
     if training:
         model.train()
-    return loss.item()
+    return running_loss.item()
 
-def do_training(args: Namespace) -> None:
+def main(args: Namespace) -> None:
+    set_seed(args.seed)
+    if args.reproducible:
+        initiate_reproducibility()
+
     best_val = float("inf")
-    dataset = get_dataset(args.data_path, args.batch_size, args.max_distance, args.num_workers)
-    train_loader = dataset.get_data_loader('train')
+    dataset = get_dataset(**args)
+    train_loader = dataset.get_data_loader('train', debug=args.debug)
     val_loader = dataset.get_data_loader('val')
-    model = get_model(args.max_distance, args.clamp_output)
+    model = get_model(**args)
     loss_fn = get_loss_fn(args.loss)()
     device = 'cuda' if is_torch_cuda_available() else 'cpu'
     model = model.to(device, non_blocking=True)
@@ -114,52 +119,60 @@ def do_training(args: Namespace) -> None:
     optimizer = optimizer_fn(params=model.parameters(), lr=args.lr)
     scheduler = get_scheduler(args, optimizer)
 
-    epoch = 0
-    it_total = 0
     if not os.path.exists(args.output_path):
-        os.makedirs(args.output_path)
-    with open(os.path.join(args.output_path, "log.txt"), "w", buffering=1) as writer:
-        while epoch < args.epochs:
-            data: _DATA
-            model.train()
-            for data in train_loader:
-                optimizer.zero_grad()
-                data = to_device(data, device)
-                preds = model(data['in'])
-                loss: Tensor = loss_fn(preds, data['out'])
-                loss.backward()
-                optimizer.step()
-                if it_total % args.log_every_iters == 0:
-                    writer.write(f"[{ctime()} | epoch {epoch:04d} | iteration {it_total:04d}] train loss {loss.item():.8f}\n")
-                del preds, data, loss
-                it_total += 1
-            epoch += 1
+        os.makedirs(args.output_path, exist_ok=True)
 
-            if epoch % args.val_every_epochs == 0:
-                loss_val = do_validation(args, model, val_loader, device)
-                writer.write(f"[{ctime()} | epoch {epoch:04d} | iteration {it_total:04d}] val loss {loss_val:.8f}\n")
-                if scheduler is not None:
-                    scheduler.step(loss_val)
-                if args.ckpt_best_val and loss_val <= best_val:
-                    ckpts_best_old = glob.glob("ckpt_*_best.tar", root_dir=args.output_path)
-                    if len(ckpts_best_old) > 0:
-                        for ckpt in ckpts_best_old:
-                            os.remove(os.path.join(args.output_path, ckpt))
-                    best_val = loss_val
-                    ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}_best.tar")
-                    save_training(
-                        ckpt_path=ckpt_path,
-                        model=model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        args=args,
-                        epoch=epoch,
-                        it_total=it_total,
-                        best_val=best_val)
-                # torch.cuda.empty_cache()
+    # initialize TensorBoard SummaryWriter
+    writer : SummaryWriter | None = None
+    if args.tensorboard_summaries:
+        from torch.utils.tensorboard import SummaryWriter
 
-            if epoch % args.ckpt_every_epochs == 0 or epoch == args.epochs:
-                ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}.tar")
+        tensorboard_path = os.path.join(args.output_path, "tensorboard")
+        os.makedirs(tensorboard_path, exist_ok=True)
+        writer = SummaryWriter(tensorboard_path)
+        writer.add_custom_scalars({
+            "Loss": {
+                "Total Loss": ["Multiline", ["loss/train", "loss/val"]]
+            }
+        })
+
+    # torch.backends.cudnn.benchmark = True
+
+    running_loss = 0.
+    global_batch_index = 0
+    epoch = 0
+    for epoch in range(args.epochs):
+        data: DATA
+        set_seed(args.seed + epoch)
+        model.train()
+        for data in train_loader:
+            optimizer.zero_grad()
+            data = to_device(data, device)
+            if global_batch_index == 0:
+                writer.add_graph(model, data)
+            preds = model(data['tensor_in'])
+            loss: Tensor = loss_fn(preds, data['tensor_out'])
+            loss.backward()
+            optimizer.step()
+            if writer:
+                if (global_batch_index + 1) % args.log_every_iters == 0:
+                    writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_batch_index)
+                    running_loss = 0.
+                else:
+                    running_loss += loss.item()
+            del preds, data, loss
+            global_batch_index += 1
+
+        if writer and (epoch + 1) % args.val_every_epochs == 0:
+            loss_val = do_validation(args, model, val_loader, device)
+            writer.add_scalar("loss/val", loss_val, global_batch_index)
+            if args.ckpt_best_val and loss_val <= best_val:
+                ckpts_best_old = glob.glob("ckpt_*_best.tar", root_dir=args.output_path)
+                if len(ckpts_best_old) > 0:
+                    for ckpt in ckpts_best_old:
+                        os.remove(os.path.join(args.output_path, ckpt))
+                best_val = loss_val
+                ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}_best.tar")
                 save_training(
                     ckpt_path=ckpt_path,
                     model=model,
@@ -167,28 +180,36 @@ def do_training(args: Namespace) -> None:
                     scheduler=scheduler,
                     args=args,
                     epoch=epoch,
-                    it_total=it_total,
+                    it_total=global_batch_index,
                     best_val=best_val)
-                remove_old_ckpts(args)
+            # torch.cuda.empty_cache()
 
-if __name__ == '__main__':
-    # TODO:
-    # - add reproducibility by specifying fixed seeds for random algos
-    # - add training resuming support
-    # - add finetuning support?
-    # - add configuration support
-    # - add stop signal handling
-    # - add AMP training (Automatic Mixed Precision)
-    # - log normalized loss relative to max_distance (for comparability)
-    # - Tensorboard
+        if (epoch + 1) % args.ckpt_every_epochs == 0 or epoch + 1 == args.epochs:
+            ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}.tar")
+            save_training(
+                ckpt_path=ckpt_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                args=args,
+                epoch=epoch,
+                it_total=global_batch_index,
+                best_val=best_val)
+            remove_old_ckpts(args)
 
+def get_args_parser() -> ArgumentParser:
     parser = ArgumentParser()
 
     group = parser.add_argument_group("Data")
     group.add_argument("--data-path", type=str) # Path)
+    group.add_argument("--to-sdr", type=bool, default=True)
     group.add_argument("--batch-size", type=int, default=16)
     group.add_argument("--num-workers", type=int, default=4)
     group.add_argument("--max-distance", type=float, default=10)
+
+    group = parser.add_argument_group("Model")
+    group.add_argument("--clamp-output", type=bool, default=False)
+    group.add_argument("--size", type=int, default=32)
 
     group = parser.add_argument_group("Optimizer")
     group.add_argument("--optimizer", type=str, default='adam', choices=["adam", "sgd", "rmsprop"])
@@ -210,10 +231,37 @@ if __name__ == '__main__':
     group.add_argument("--log-every-iters", type=int, default=10)
 
     group = parser.add_argument_group("Other")
-    group.add_argument("--seed", type=int, default=-1)
-    group.add_argument("--clamp-output", type=bool, default=False)
+    group.add_argument("--reproducible", type=bool, default=False)
+    group.add_argument("--seed", type=int, default=None)
+    group.add_argument("--tag", type=str, default=None)
+    group.add_argument("--debug", type=bool, default=False)
 
-    args = parser.parse_args()
+    return parser
+
+def process_args(args: Namespace) -> None:
+    # if using Path from pathlib:
     # args.output_path = args.output_path.resolve()
+    if args.tag:
+        args.output_path = os.path.join(args.output_path, args.tag)
+    if args.seed is None:
+        args.seed = 42 # or torch.initial_seed() % 2 ** 32
 
-    do_training(args)
+if __name__ == '__main__':
+    # TODO:
+    # - add data augmentation
+    # - add reproducibility by specifying fixed seeds for random algos
+    # - add training resuming support
+    # - add finetuning support?
+    # - add configuration support
+    # - add stop signal handling
+    # - add AMP training (Automatic Mixed Precision)
+    #   - in this case, watch out for GradScaler
+    #     - if gradient clipping or gradient norm clipping is used,
+    #       it should be done on the unscaled gradients
+    # - log normalized loss relative to max_distance (for comparability)
+    # - Tensorboard
+    # - Normalize input data (e.g. color values between -1 and 1)
+
+    args = get_args_parser().parse_args()
+    process_args(args)
+    main(args)

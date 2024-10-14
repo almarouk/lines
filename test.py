@@ -1,9 +1,8 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch.nn import Module
     from torch import Tensor
-    _DATA : TypeAlias = dict[str, Tensor]
 
 import os
 # should be placed BEFORE importing opencv
@@ -15,15 +14,13 @@ from Dataset import BoxesDataset
 from Model import LineDetector
 from argparse import ArgumentParser, Namespace
 import cv2
+from utils import DATA, to_device
 
 def get_dataset(data_path: str, batch_size: int, max_distance: float, num_workers: int):
     return BoxesDataset(data_path, batch_size, max_distance, num_workers)
 
 def get_model(max_distance: float, clamp_output: bool) -> Module:
     return LineDetector(max_distance, clamp_output)
-
-def to_device(data: _DATA, device: str) -> _DATA:
-    return {k: v.to(device, non_blocking=True) for k, v in data.items()}
 
 def run(args: Namespace) -> None:
     ckpt = torch.load(args.ckpt_path, map_location='cpu')
@@ -41,13 +38,13 @@ def run(args: Namespace) -> None:
 
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
-    data: _DATA
+    data: DATA
     for data in data_loader:
-        images = data['in'].detach().cpu().numpy()
-        ground_truths = data['out'].detach().cpu().numpy()
+        images = data['tensor_in'].detach().cpu().numpy()
+        ground_truths = data['tensor_out'].detach().cpu().numpy()
         with torch.no_grad():
             data = to_device(data, device)
-            predictions : Tensor = model(data['in'])
+            predictions : Tensor = model(data['tensor_in'])
             predictions = predictions.detach().cpu().numpy()
         images = images.transpose((0, 2, 3, 1))
         for i in range(len(images)):

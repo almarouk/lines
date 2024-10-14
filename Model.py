@@ -4,10 +4,11 @@ import torch.nn.functional as F
 
 
 class VGGUNet(Module):
-    def __init__(self):
+    def __init__(self, size: int):
         super().__init__()
+        self.size = size
         self.pool = AvgPool2d(kernel_size=2, stride=2)
-        sizes = [32, 64, 128, 256]
+        sizes = [size, size * 2, size * 4, size * 8]
         
         # Encoder blocks
         self.block1 = Sequential(
@@ -94,12 +95,12 @@ class VGGUNet(Module):
         return out
 
 class LineDetector(Module):
-    def __init__(self, max_distance: float, clamp_output: bool):
+    def __init__(self, size: int, max_distance: float, clamp_output: bool):
         super().__init__()
         self.max_distance = max_distance
         self.clamp_output = clamp_output
-        size = 32
-        self.base = VGGUNet()
+        self.size = size
+        self.base = VGGUNet(size)
         self.head = Sequential(
             Conv2d(size, 1, kernel_size=1),
             ReLU(),
