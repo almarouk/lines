@@ -30,6 +30,7 @@ import sys
 import glob
 import re
 from contextlib import nullcontext
+import numpy as np
 
 def get_dataset(
         data_path: str,
@@ -99,7 +100,6 @@ def do_validation(
         model: Module,
         data_loader: DataLoader,
         device: str) -> float:
-    MSELoss()
     loss_fn = get_loss_fn(args.loss)(reduction='none')
     running_loss: Tensor = 0
     num_samples: int = 0
@@ -123,7 +123,7 @@ def main(args: Namespace) -> None:
 
     best_val = float("inf")
     dataset = get_dataset(**vars(args))
-    train_loader = dataset.get_data_loader('train', debug=args.debug)
+    train_loader = dataset.get_data_loader('train')
     val_loader = dataset.get_data_loader('val')
     model = get_model(**vars(args))
     loss_fn = get_loss_fn(args.loss)()
@@ -133,26 +133,37 @@ def main(args: Namespace) -> None:
     optimizer = optimizer_fn(params=model.parameters(), lr=args.lr)
     scheduler = get_scheduler(args, optimizer)
 
+    data: DATA
+    model.train()
+
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path, exist_ok=True)
 
     # initialize TensorBoard SummaryWriter
     writer : SummaryWriter | None = None
+    tb_path = os.path.join(args.output_path, "tensorboard", "exp4")
+    os.makedirs(tb_path, exist_ok=True)
+
     if args.debug:
         from torch.utils.tensorboard import SummaryWriter
 
-        tb_path = os.path.join(args.output_path, "tensorboard")
-        os.makedirs(tb_path, exist_ok=True)
         writer = SummaryWriter(tb_path)
         writer.add_custom_scalars({
             "Loss": {
                 "Total Loss": ["Multiline", ["loss/train", "loss/val"]]
             }
         })
+
+        data = to_device(dataset.get_samples("train", 5, args.seed), device)
+        writer.add_graph(model, data['tensor_in'])
+        writer.add_image("Sample/Raw Input", np.concatenate(data["raw_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Raw Output", np.concatenate(data["raw_out"], axis=0), dataformats="HW")
+        writer.add_image("Sample/Transformed Input", np.concatenate(data["transformed_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Transformed Output", np.concatenate(data["transformed_out"], axis=0), dataformats="HW")
+        del data
+
     if args.profiling:
         from torch.profiler import profile, schedule, tensorboard_trace_handler, ProfilerActivity
-        tb_path = os.path.join(args.output_path, "tensorboard")
-        os.makedirs(tb_path, exist_ok=True)
 
     # torch.backends.cudnn.benchmark = True
 
@@ -160,9 +171,7 @@ def main(args: Namespace) -> None:
     global_batch_index = 0
     epoch = 0
     for epoch in range(args.epochs):
-        data: DATA
         set_seed(args.seed + epoch)
-        model.train()
         with profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=schedule(skip_first=3, wait=0, warmup=3, active=5, repeat=1),
@@ -174,8 +183,6 @@ def main(args: Namespace) -> None:
             for data in train_loader:
                 optimizer.zero_grad()
                 data = to_device(data, device)
-                if args.debug and global_batch_index == 0:
-                    writer.add_graph(model, data['tensor_in'])
                 preds = model(data['tensor_in'])
                 loss: Tensor = loss_fn(preds, data['tensor_out'])
                 loss.backward()
@@ -186,7 +193,7 @@ def main(args: Namespace) -> None:
                         running_loss = 0.
                     else:
                         running_loss += loss.item()
-                del preds, data, loss
+                # del preds, data, loss
                 global_batch_index += 1
                 if args.profiling and epoch == 0:
                     prof.step()
@@ -231,7 +238,7 @@ def get_args_parser() -> ArgumentParser:
     group = parser.add_argument_group("Data")
     group.add_argument("--data-path", type=str) # Path)
     group.add_argument("--to-sdr", type=bool, default=True)
-    group.add_argument("--batch-size", type=int, default=16)
+    group.add_argument("--batch-size", type=int, default=8)
     group.add_argument("--num-workers", type=int, default=4)
     group.add_argument("--max-distance", type=float, default=10)
 

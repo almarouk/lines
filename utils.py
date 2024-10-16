@@ -35,6 +35,13 @@ def initiate_reproducibility() -> None:
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True) # which includes torch.backends.cudnn.deterministic = True
 
-def apply_crop(img: np.ndarray, crop_box: list[int]) -> np.ndarray:
-    # img = img.copy()
-    return img[crop_box[0]:crop_box[2], crop_box[1]:crop_box[3]]
+def apply_crop(img: np.ndarray, crop_box: list[int], return_img_w_bbox: bool = False) -> np.ndarray:
+    img_cropped = img[crop_box[0]:crop_box[2], crop_box[1]:crop_box[3]]
+    if return_img_w_bbox:
+        img_w_bbox = img.copy()
+        img_w_bbox[crop_box[0]:crop_box[2], crop_box[1]] = 0
+        img_w_bbox[crop_box[0]:crop_box[2], crop_box[3]-1] = 0
+        img_w_bbox[crop_box[0], crop_box[1]:crop_box[3]] = 0
+        img_w_bbox[crop_box[2]-1, crop_box[1]:crop_box[3]] = 0
+        return img_cropped, img_w_bbox
+    return img_cropped

@@ -1,12 +1,12 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, override, Callable, List, Iterator
 
 if TYPE_CHECKING:
     from utils import DATA
 
 import torch
 import torch.utils
-from torch.utils.data import DataLoader, Dataset, default_collate
+from torch.utils.data import DataLoader, Dataset, default_collate, Sampler
 from torch import Tensor
 from torchvision.transforms import v2
 from torch.nn import ModuleList
@@ -50,7 +50,7 @@ class BoxesDataset:
                 split_files.extend(scene_files.values())
             split_files.sort()
 
-    def get_data_loader(self, split, debug=False) -> DataLoader:
+    def get_data_loader(self, split: str) -> DataLoader:
         assert split in self._scene_ids
         is_train = split == "train"
         # TODO replace list of string by numpy array in case of multiple workers
@@ -61,33 +61,76 @@ class BoxesDataset:
                 root_path=self._rootpath,
                 to_sdr=self._to_sdr,
                 max_distance=self._max_distance,
-                augment=is_train,
-                debug=debug
+                augment=is_train
             ),
             batch_size=self._batch_size,
             shuffle=is_train,
             drop_last=is_train,
             num_workers=self._num_workers,
             pin_memory=True,
-            worker_init_fn=worker_init_fn,
+            worker_init_fn=get_worker_init_fn(),
             collate_fn=collate_wrapper,
             # to reduce worker creation overhead, especially on Windows where 'spawn' method
             # is used in contrast with 'fork' method on Linux to create worker processes
             persistent_workers=is_train and self._num_workers > 0
         )
+    
+    def get_samples(self, split: str, n_samples: int, seed: int) -> DATA:
+        assert split in self._scene_ids
+        is_train = split == "train"
+        loader = DataLoader(
+            dataset=_Dataset(
+                files=self._files[split],
+                root_path=self._rootpath,
+                to_sdr=self._to_sdr,
+                max_distance=self._max_distance,
+                augment=is_train
+            ),
+            batch_sampler=OneBatchSampler(n_samples, len(self._files[split]), True, seed),
+            num_workers=0,
+            pin_memory=True,
+            worker_init_fn=get_worker_init_fn(seed),
+            collate_fn=collate_wrapper,
+            persistent_workers=False
+        )
+        for data in loader:
+            break
+        return data
 
-def worker_init_fn(worker_id: int):
-    # worker seed is initialized by worker's parent and can be accessed by either of:
-    # - torch.initial_seed()
-    # - torch.utils.data.get_worker_info().seed
-    # PS. 1. note that torch.utils.data.get_worker_info() returns None in main process
-    # PS. 2. worker_init_fn will never be called by main process, even if num_workers=0 or 1
-    # PS. 3. if persistent_workers=True, worker_init_fn is called only once per worker 
-    # for the whole lifespan of the worker
-    worker_seed = torch.initial_seed()
-    worker_seed = worker_seed % 2 ** 32
-    set_seed(worker_seed)
-    # or only set seed of numpy and python since pytorch's seed is already set correctly
+class OneBatchSampler(Sampler[List[int]]):
+
+    def __init__(self, n_samples: int, n_data, debug: bool, seed: int) -> None:
+        self.n_samples = n_samples
+        self.n_data = n_data
+        self.debug = debug
+        self.seed = seed
+
+    def __iter__(self) -> Iterator[List[int]]:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        yield [(int(i), self.debug) for i in torch.randperm(self.n_data, generator=generator)[:self.n_samples]]
+
+    def __len__(self) -> int:
+        return 1
+
+def get_worker_init_fn(seed: int | None = None) -> Callable[[int], None]:
+
+    def worker_init_fn(worker_id: int):
+        # worker seed is initialized by worker's parent and can be accessed by either of:
+        # - torch.initial_seed()
+        # - torch.utils.data.get_worker_info().seed
+        # PS. 1. note that torch.utils.data.get_worker_info() returns None in main process
+        # PS. 2. worker_init_fn will never be called by main process, even if num_workers=0 or 1
+        # PS. 3. if persistent_workers=True, worker_init_fn is called only once per worker 
+        # for the whole lifespan of the worker
+        worker_seed = torch.initial_seed() if worker_init_fn.seed is None else worker_init_fn.seed
+        worker_seed = worker_seed % 2 ** 32
+        set_seed(worker_seed)
+        # or only set seed of numpy and python since pytorch's seed is already set correctly
+
+    fn = worker_init_fn
+    fn.seed = seed
+    return fn
 
 def collate_wrapper(batch: list[DATA]) -> DATA:
     # custom collate function that doesn't cast non-tensor values to tensors
@@ -103,7 +146,7 @@ class _Dataset(Dataset):
     def __init__(self,
             files: list[str], root_path: str,
             to_sdr: bool, max_distance: float,
-            augment: bool, debug: bool
+            augment: bool
         ):
         super().__init__()
         self._files = files
@@ -111,7 +154,6 @@ class _Dataset(Dataset):
         self._to_sdr = to_sdr
         self._max_distance = max_distance
         self._augment = augment
-        self._debug = debug
         self._init()
 
     def _init(self):
@@ -138,7 +180,10 @@ class _Dataset(Dataset):
             ])
 
     @override
-    def __getitem__(self, index) -> DATA:
+    def __getitem__(self, index, debug=False) -> DATA:
+        if isinstance(index, tuple):
+            debug = index[1]
+            index = index[0]
         item : DATA = {}
 
         # IMREAD_UNCHANGED to read alpha channel
@@ -149,21 +194,24 @@ class _Dataset(Dataset):
         # line information is saved in alpha channel
         img_out = cv2.imread(filepath_out, flags)[..., -1]
 
-        if self._debug:
+        if debug:
             item['raw_in'] = img_in
             item['raw_out'] = img_out
 
         # TODO use RandomCrop in data augmentation instead?
         # crop image
-        crop_factor = 0.25
+        crop_factor = 0.5
         initial_shape = np.array(img_in.shape[:2])
         crop_shape = np.floor(crop_factor * initial_shape).astype(int)
         i, j = np.random.randint(0, np.ceil((1 - crop_factor) * initial_shape))
         crop_box = [i, j, i + crop_shape[0], j + crop_shape[1]]
-        if self._debug:
+        if debug:
             item['crop_box'] = crop_box
-        img_in = apply_crop(img_in, crop_box)
-        img_out = apply_crop(img_out, crop_box)
+            img_in, item['raw_in'] = apply_crop(img_in, crop_box, True)
+            img_out, item['raw_out'] = apply_crop(img_out, crop_box, True)
+        else:
+            img_in = apply_crop(img_in, crop_box)
+            img_out = apply_crop(img_out, crop_box)
 
         # add random uniform background and apply alpha blending
         # note that the foreground is pre-multiplied by alpha in EXR format
@@ -189,7 +237,7 @@ class _Dataset(Dataset):
         img_in = Tensor(img_in)
         if self._augment:
             img_in = self.transforms_augment(img_in)
-        if self._debug:
+        if debug:
             item['transformed_in'] = np.transpose(img_in.numpy(), (1, 2, 0))
         img_in : Tensor = self.preprocess(img_in)
 
@@ -199,7 +247,7 @@ class _Dataset(Dataset):
         img_out = cv2.distanceTransform(img_out, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
         _, img_out = cv2.threshold(img_out, self._max_distance, None, cv2.THRESH_TRUNC)
         # img_out = np.clip(img_out, 0, max_distance)
-        if self._debug:
+        if debug:
             item['transformed_out'] = img_out
         img_out = Tensor(img_out)
 
