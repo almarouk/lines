@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 import torch
 import torch.utils
 from torch.utils.data import DataLoader, Dataset, default_collate, Sampler
+from torch.utils.data.dataloader import _worker_init_fn_t
 from torch import Tensor
 from torchvision.transforms import v2
 from torch.nn import ModuleList
@@ -68,7 +69,7 @@ class BoxesDataset:
             drop_last=is_train,
             num_workers=self._num_workers,
             pin_memory=True,
-            worker_init_fn=get_worker_init_fn(),
+            worker_init_fn=worker_init_fn(),
             collate_fn=collate_wrapper,
             # to reduce worker creation overhead, especially on Windows where 'spawn' method
             # is used in contrast with 'fork' method on Linux to create worker processes
@@ -87,9 +88,9 @@ class BoxesDataset:
                 augment=is_train
             ),
             batch_sampler=OneBatchSampler(n_samples, len(self._files[split]), True, seed),
-            num_workers=0,
+            num_workers=1,
             pin_memory=True,
-            worker_init_fn=get_worker_init_fn(seed),
+            worker_init_fn=worker_init_fn(seed),
             collate_fn=collate_wrapper,
             persistent_workers=False
         )
@@ -113,9 +114,12 @@ class OneBatchSampler(Sampler[List[int]]):
     def __len__(self) -> int:
         return 1
 
-def get_worker_init_fn(seed: int | None = None) -> Callable[[int], None]:
+class worker_init_fn(_worker_init_fn_t):
+    def __init__(self, seed: int | None = None) -> None:
+        self.seed = seed
 
-    def worker_init_fn(worker_id: int):
+    @override
+    def __call__(self, worker_id: int) -> None:
         # worker seed is initialized by worker's parent and can be accessed by either of:
         # - torch.initial_seed()
         # - torch.utils.data.get_worker_info().seed
@@ -123,14 +127,10 @@ def get_worker_init_fn(seed: int | None = None) -> Callable[[int], None]:
         # PS. 2. worker_init_fn will never be called by main process, even if num_workers=0 or 1
         # PS. 3. if persistent_workers=True, worker_init_fn is called only once per worker 
         # for the whole lifespan of the worker
-        worker_seed = torch.initial_seed() if worker_init_fn.seed is None else worker_init_fn.seed
+        worker_seed = torch.initial_seed() if self.seed is None else self.seed
         worker_seed = worker_seed % 2 ** 32
         set_seed(worker_seed)
         # or only set seed of numpy and python since pytorch's seed is already set correctly
-
-    fn = worker_init_fn
-    fn.seed = seed
-    return fn
 
 def collate_wrapper(batch: list[DATA]) -> DATA:
     # custom collate function that doesn't cast non-tensor values to tensors
