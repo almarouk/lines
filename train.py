@@ -106,12 +106,12 @@ def save_training(
     torch.save(ckpt, ckpt_path)
 
 def remove_old_ckpts(args: Namespace, tag: str = ''):
-    ckpts_all = glob.glob(f"ckpt{tag}_*.tar", root_dir=args.output_path)
+    ckpts_all = glob.glob(f"ckpt{tag}_*.tar", root_dir=args.training_path)
     ckpts_filtered = [re.match(f"ckpt{tag}_(\\d+).tar", ckpt) for ckpt in ckpts_all]
     ckpts_filtered = sorted([(int(x.groups()[0]), x.string) for x in ckpts_filtered if x is not None], key=lambda x: x[0])
     if len(ckpts_filtered) > args.keep_last_ckpts:
         for _, ckpt in ckpts_filtered[:-args.keep_last_ckpts]:
-            os.remove(os.path.join(args.output_path, ckpt))
+            os.remove(os.path.join(args.training_path, ckpt))
 
 @torch.no_grad()
 def do_validation(
@@ -155,18 +155,15 @@ def main(args: Namespace) -> None:
     data: DATA
     model.train()
 
-    if not os.path.exists(args.output_path):
-        os.makedirs(args.output_path, exist_ok=True)
+    os.makedirs(args.training_path, exist_ok=True)
+    os.makedirs(args.tb_path, exist_ok=True)
 
     # initialize TensorBoard SummaryWriter
     writer : SummaryWriter | None = None
-    tb_path = os.path.join(args.output_path, "tensorboard", "exp4")
-    os.makedirs(tb_path, exist_ok=True)
-
     if args.debug:
         from torch.utils.tensorboard import SummaryWriter
 
-        writer = SummaryWriter(tb_path)
+        writer = SummaryWriter(args.tb_path)
         writer.add_custom_scalars({
             "Loss": {
                 "Total Loss": ["Multiline", ["loss/train", "loss/val"]]
@@ -197,7 +194,7 @@ def main(args: Namespace) -> None:
         set_seed(args.seed + epoch)
         model.train()
         profiling = args.profiling and epoch == 0
-        with get_profiler(profiling, tb_path) as prof:
+        with get_profiler(profiling, args.tb_path) as prof:
             for data in train_loader:
                 optimizer.zero_grad()
                 data = to_device(data, device)
@@ -250,7 +247,7 @@ def main(args: Namespace) -> None:
 
             if args.ckpt_best_val and loss_val <= best_val:
                 best_val = loss_val
-                ckpt_path = os.path.join(args.output_path, f"ckpt_best_{epoch:04d}.tar")
+                ckpt_path = os.path.join(args.training_path, f"ckpt_best_{epoch:04d}.tar")
                 save_training(
                     ckpt_path=ckpt_path,
                     model=model,
@@ -264,7 +261,7 @@ def main(args: Namespace) -> None:
             # torch.cuda.empty_cache()
 
         if (epoch + 1) % args.ckpt_every_epochs == 0 or epoch + 1 == args.epochs:
-            ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}.tar")
+            ckpt_path = os.path.join(args.training_path, f"ckpt_{epoch:04d}.tar")
             save_training(
                 ckpt_path=ckpt_path,
                 model=model,
@@ -321,8 +318,11 @@ def get_args_parser() -> ArgumentParser:
 def process_args(args: Namespace) -> None:
     # if using Path from pathlib:
     # args.output_path = args.output_path.resolve()
-    if args.tag:
-        args.output_path = os.path.join(args.output_path, args.tag)
+    if args.tag is None:
+        import time
+        args.tag = time.strftime("%Y%m%d-%H%M%S")
+    args.training_path = os.path.join(args.output_path, "training", args.tag)
+    args.tb_path = os.path.join(args.output_path, "tensorboard", args.tag)
     if args.seed is None:
         args.seed = 42 # or torch.initial_seed() % 2 ** 32
 
