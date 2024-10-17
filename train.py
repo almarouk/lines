@@ -137,8 +137,7 @@ def do_validation(
 
 def main(args: Namespace) -> None:
     set_seed(args.seed)
-    if args.reproducible:
-        initiate_reproducibility()
+    initiate_reproducibility(args.reproducible)
 
     best_val = float("inf")
     dataset = get_dataset(**vars(args))

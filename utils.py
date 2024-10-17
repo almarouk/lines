@@ -31,9 +31,9 @@ def set_seed(seed: int) -> None:
     # the following should be done before launching the interpreter
     # os.environ['PYTHONHASHSEED'] = str(3)
 
-def initiate_reproducibility() -> None:
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True) # which includes torch.backends.cudnn.deterministic = True
+def initiate_reproducibility(mode: bool = True) -> None:
+    torch.backends.cudnn.benchmark = mode
+    torch.use_deterministic_algorithms(mode) # which includes torch.backends.cudnn.deterministic = True
 
 def apply_crop(img: np.ndarray, crop_box: list[int], return_img_w_bbox: bool = False) -> np.ndarray:
     img_cropped = img[crop_box[0]:crop_box[2], crop_box[1]:crop_box[3]]
