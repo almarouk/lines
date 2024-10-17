@@ -235,7 +235,7 @@ def main(args: Namespace) -> None:
                     model.train(training)
                 writer.add_image(
                     f"Prediction/{tag}/Output",
-                    preds,
+                    torch.cat(list(preds), dim=0),
                     global_batch_index,
                     dataformats="HW")
                 # TODO visualize non-reduced loss as heatmap
@@ -257,7 +257,7 @@ def main(args: Namespace) -> None:
                     it_total=global_batch_index,
                     best_val=best_val)
                 remove_old_ckpts(args, "_best")
-            # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         if (epoch + 1) % args.ckpt_every_epochs == 0 or epoch + 1 == args.epochs:
             ckpt_path = os.path.join(args.training_path, f"ckpt_{epoch:04d}.tar")
@@ -308,7 +308,7 @@ def get_args_parser() -> ArgumentParser:
     group = parser.add_argument_group("Other")
     group.add_argument("--reproducible", type=bool, default=False)
     group.add_argument("--seed", type=int, default=None)
-    group.add_argument("--tag", type=str, default=None)
+    group.add_argument("--tag", type=str, default='')
     group.add_argument("--debug", type=bool, default=False)
     group.add_argument("--profiling", type=bool, default=False)
 
@@ -317,9 +317,8 @@ def get_args_parser() -> ArgumentParser:
 def process_args(args: Namespace) -> None:
     # if using Path from pathlib:
     # args.output_path = args.output_path.resolve()
-    if args.tag is None:
-        import time
-        args.tag = time.strftime("%Y%m%d-%H%M%S")
+    import time
+    args.tag = f"{args.tag}_{time.strftime("%Y%m%d-%H%M%S")}"
     args.training_path = os.path.join(args.output_path, "training", args.tag)
     args.tb_path = os.path.join(args.output_path, "tensorboard", args.tag)
     if args.seed is None:

@@ -32,7 +32,7 @@ def set_seed(seed: int) -> None:
     # os.environ['PYTHONHASHSEED'] = str(3)
 
 def initiate_reproducibility(mode: bool = True) -> None:
-    torch.backends.cudnn.benchmark = mode
+    torch.backends.cudnn.benchmark = not mode
     torch.use_deterministic_algorithms(mode) # which includes torch.backends.cudnn.deterministic = True
 
 def apply_crop(img: np.ndarray, crop_box: list[int], return_img_w_bbox: bool = False) -> np.ndarray:
