@@ -15,14 +15,14 @@ import os
 # should be placed BEFORE importing opencv
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
-from Dataset import BoxesDataset
-from Model import LineDetector
+from dataset import BoxesDataset
+from model import LineDetector
+from loss import Loss
 from utils import to_device, set_seed, initiate_reproducibility
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim import Adam, SGD, RMSprop
-from torch.nn import L1Loss, MSELoss
 from torch.cuda import is_available as is_torch_cuda_available
 from argparse import ArgumentParser
 # from pathlib import Path
@@ -47,11 +47,16 @@ def get_model(
         max_distance: float,
         clamp_output: bool,
         **kwargs
-    ) -> Module:
+    ) -> LineDetector:
     return LineDetector(size, max_distance, clamp_output)
 
-def get_loss_fn(loss: str) -> Module:
-    return {'l1': L1Loss, 'l2': MSELoss}[loss]
+def get_loss_fn(
+        loss: str,
+        max_distance: float,
+        reduction: str = "mean",
+        **kwargs
+    ) -> Loss:
+    return Loss(loss, max_distance, reduction)
 
 def get_optimizer_fn(optimizer: str) -> type[Optimizer]:
     return {'adam': Adam, 'sgd': SGD, 'rmsprop': RMSprop}[optimizer]
@@ -65,6 +70,20 @@ def get_scheduler(args: Namespace, optimizer: Optimizer) -> None | LRScheduler:
     else:
         sys.exit(f"Unrecognized option for argument scheduler: {args.scheduler}")
     return scheduler
+
+def get_profiler(profiling: bool, tb_path: str):
+    if not profiling:
+        return nullcontext()
+
+    from torch.profiler import profile, schedule, tensorboard_trace_handler, ProfilerActivity
+
+    return profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=schedule(skip_first=3, wait=0, warmup=3, active=5, repeat=1),
+        on_trace_ready=tensorboard_trace_handler(tb_path),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True)
 
 def save_training(
         ckpt_path: str,
@@ -86,13 +105,13 @@ def save_training(
     }
     torch.save(ckpt, ckpt_path)
 
-def remove_old_ckpts(args: Namespace):
-    ckpts_all = glob.glob("ckpt_*.tar", root_dir=args.output_path)
-    ckpts_filtered = [re.match(r"ckpt_(\d+).tar", ckpt) for ckpt in ckpts_all]
-    ckpts_filtered = sorted([int(x.groups()[0]) for x in ckpts_filtered if x is not None])
+def remove_old_ckpts(args: Namespace, tag: str = ''):
+    ckpts_all = glob.glob(f"ckpt{tag}_*.tar", root_dir=args.output_path)
+    ckpts_filtered = [re.match(f"ckpt{tag}_(\\d+).tar", ckpt) for ckpt in ckpts_all]
+    ckpts_filtered = sorted([(int(x.groups()[0]), x.string) for x in ckpts_filtered if x is not None], key=lambda x: x[0])
     if len(ckpts_filtered) > args.keep_last_ckpts:
-        for ckpt in ckpts_filtered[:-args.keep_last_ckpts]:
-            os.remove(os.path.join(args.output_path, f"ckpt_{ckpt:04d}.tar"))
+        for _, ckpt in ckpts_filtered[:-args.keep_last_ckpts]:
+            os.remove(os.path.join(args.output_path, ckpt))
 
 @torch.no_grad()
 def do_validation(
@@ -100,7 +119,7 @@ def do_validation(
         model: Module,
         data_loader: DataLoader,
         device: str) -> float:
-    loss_fn = get_loss_fn(args.loss)(reduction='none')
+    loss_fn = get_loss_fn(**vars(args), reduction="none")
     running_loss: Tensor = 0
     num_samples: int = 0
     training = model.training
@@ -126,7 +145,7 @@ def main(args: Namespace) -> None:
     train_loader = dataset.get_data_loader('train')
     val_loader = dataset.get_data_loader('val')
     model = get_model(**vars(args))
-    loss_fn = get_loss_fn(args.loss)()
+    loss_fn = get_loss_fn(**vars(args))
     device = 'cuda' if is_torch_cuda_available() else 'cpu'
     model = model.to(device, non_blocking=True)
     optimizer_fn = get_optimizer_fn(args.optimizer)
@@ -156,14 +175,18 @@ def main(args: Namespace) -> None:
 
         data = to_device(dataset.get_samples("train", 5, args.seed), device)
         writer.add_graph(model, data['tensor_in'])
-        writer.add_image("Sample/Raw Input", np.concatenate(data["raw_in"], axis=0), dataformats="HWC")
-        writer.add_image("Sample/Raw Output", np.concatenate(data["raw_out"], axis=0), dataformats="HW")
-        writer.add_image("Sample/Transformed Input", np.concatenate(data["transformed_in"], axis=0), dataformats="HWC")
-        writer.add_image("Sample/Transformed Output", np.concatenate(data["transformed_out"], axis=0), dataformats="HW")
+        writer.add_image("Sample/Train/Raw Input", np.concatenate(data["raw_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Train/Raw Output", np.concatenate(data["raw_out"], axis=0), dataformats="HW")
+        writer.add_image("Sample/Train/Transformed Input", np.concatenate(data["transformed_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Train/Transformed Output", np.concatenate(data["transformed_out"], axis=0), dataformats="HW")
         del data
 
-    if args.profiling:
-        from torch.profiler import profile, schedule, tensorboard_trace_handler, ProfilerActivity
+        data = to_device(dataset.get_samples("val", 5, args.seed), device)
+        writer.add_image("Sample/Validation/Raw Input", np.concatenate(data["raw_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Validation/Raw Output", np.concatenate(data["raw_out"], axis=0), dataformats="HW")
+        writer.add_image("Sample/Validation/Transformed Input", np.concatenate(data["transformed_in"], axis=0), dataformats="HWC")
+        writer.add_image("Sample/Validation/Transformed Output", np.concatenate(data["transformed_out"], axis=0), dataformats="HW")
+        del data
 
     # torch.backends.cudnn.benchmark = True
 
@@ -172,14 +195,9 @@ def main(args: Namespace) -> None:
     epoch = 0
     for epoch in range(args.epochs):
         set_seed(args.seed + epoch)
-        with profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=schedule(skip_first=3, wait=0, warmup=3, active=5, repeat=1),
-            on_trace_ready=tensorboard_trace_handler(tb_path),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True
-        ) if (args.profiling and epoch == 0) else nullcontext() as prof:
+        model.train()
+        profiling = args.profiling and epoch == 0
+        with get_profiler(profiling, tb_path) as prof:
             for data in train_loader:
                 optimizer.zero_grad()
                 data = to_device(data, device)
@@ -193,21 +211,46 @@ def main(args: Namespace) -> None:
                         running_loss = 0.
                     else:
                         running_loss += loss.item()
-                # del preds, data, loss
+                del preds, data, loss
                 global_batch_index += 1
-                if args.profiling and epoch == 0:
+                if profiling:
                     prof.step()
 
         if args.debug and (epoch + 1) % args.val_every_epochs == 0:
             loss_val = do_validation(args, model, val_loader, device)
             writer.add_scalar("loss/val", loss_val, global_batch_index)
+
+            def write_prediction(split: str, tag: str) -> None:
+                data = to_device(dataset.get_samples(split, 5, args.seed), device)
+                writer.add_image(
+                    f"Prediction/{tag}/Input",
+                    np.concatenate(data["transformed_in"], axis=0),
+                    global_batch_index,
+                    dataformats="HWC")
+                writer.add_image(
+                    f"Prediction/{tag}/Ground Truth",
+                    np.concatenate(data["transformed_out"], axis=0),
+                    global_batch_index,
+                    dataformats="HW")
+                with torch.no_grad():
+                    training = model.training
+                    model.eval()
+                    preds = model(data['tensor_in'])
+                    model.train(training)
+                writer.add_image(
+                    f"Prediction/{tag}/Output",
+                    preds,
+                    global_batch_index,
+                    dataformats="HW")
+                # TODO visualize non-reduced loss as heatmap
+                del data
+
+            write_prediction("train", "Train")
+            write_prediction("val", "Validation")
+
             if args.ckpt_best_val and loss_val <= best_val:
-                ckpts_best_old = glob.glob("ckpt_*_best.tar", root_dir=args.output_path)
-                if len(ckpts_best_old) > 0:
-                    for ckpt in ckpts_best_old:
-                        os.remove(os.path.join(args.output_path, ckpt))
                 best_val = loss_val
-                ckpt_path = os.path.join(args.output_path, f"ckpt_{epoch:04d}_best.tar")
+                ckpt_path = os.path.join(args.output_path, f"ckpt_best_{epoch:04d}.tar")
                 save_training(
                     ckpt_path=ckpt_path,
                     model=model,
@@ -217,6 +260,7 @@ def main(args: Namespace) -> None:
                     epoch=epoch,
                     it_total=global_batch_index,
                     best_val=best_val)
+                remove_old_ckpts(args, "_best")
             # torch.cuda.empty_cache()
 
         if (epoch + 1) % args.ckpt_every_epochs == 0 or epoch + 1 == args.epochs:

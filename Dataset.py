@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, override, Callable, List, Iterator
+from typing import TYPE_CHECKING, override, List, Iterator
 
 if TYPE_CHECKING:
     from utils import DATA
@@ -180,10 +180,10 @@ class _Dataset(Dataset):
             ])
 
     @override
-    def __getitem__(self, index, debug=False) -> DATA:
+    def __getitem__(self, index) -> DATA:
+        debug = False
         if isinstance(index, tuple):
-            debug = index[1]
-            index = index[0]
+            index, debug = index
         item : DATA = {}
 
         # IMREAD_UNCHANGED to read alpha channel
