@@ -343,16 +343,20 @@ def process_args(args: Namespace) -> None:
     else:
         args.to_sdr = HDR_TO_SDR(args.to_sdr)
 
-def trace_dev(file_path: str, tag: str) -> None:
+def trace_dev(args: Namespace) -> None:
     import sys
     import subprocess
+    import json
+    file_path = os.path.join(args.training_path, "dev_info.txt")
     with open(file_path, 'w') as f:
         f.write("\n\n---------- tag with datetime: ----------\n\n")
-        f.write(tag)
+        f.write(args.tag)
         f.write("\n\n---------- sys.argv (one line) ----------\n\n")
         f.write(" ".join(sys.argv))
         f.write("\n\n---------- sys.argv (multiline) ----------\n\n")
         f.write("\n".join(sys.argv))
+        f.write("\n\n---------- args ----------\n\n")
+        f.write(json.dumps(vars(args), default=lambda x: str(x), indent=4))
         cwd = os.path.abspath(os.path.dirname(sys.argv[0]))
         f.write("\n\n---------- cwd ----------\n\n")
         f.write(cwd)
@@ -388,7 +392,7 @@ if __name__ == '__main__':
     try:
         args = get_args_parser().parse_args()
         process_args(args)
-        trace_dev(os.path.join(args.training_path, "dev_info.txt"), args.tag)
+        trace_dev(args)
         main(args)
     except:
         if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
