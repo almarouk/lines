@@ -160,9 +160,6 @@ def main(args: Namespace) -> None:
     data: DATA
     model.train()
 
-    os.makedirs(args.training_path, exist_ok=True)
-    os.makedirs(args.tb_path, exist_ok=True)
-
     # initialize TensorBoard SummaryWriter
     writer : SummaryWriter | None = None
     if args.debug:
@@ -337,6 +334,8 @@ def process_args(args: Namespace) -> None:
     args.tag = f"{args.tag}_{time.strftime("%Y%m%d-%H%M%S")}"
     args.training_path = os.path.join(args.output_path, "training", args.tag)
     args.tb_path = os.path.join(args.output_path, "tensorboard", args.tag)
+    os.makedirs(args.training_path, exist_ok=True)
+    os.makedirs(args.tb_path, exist_ok=True)
     if args.seed is None:
         args.seed = 42 # or torch.initial_seed() % 2 ** 32
     if args.to_sdr is None:
@@ -365,6 +364,10 @@ if __name__ == '__main__':
     try:
         args = get_args_parser().parse_args()
         process_args(args)
+        with open(os.path.join(args.training_path, "command.txt"), 'w') as f:
+            f.write(" ".join(sys.argv))
+            f.write("\n\n")
+            f.write("\n".join(sys.argv))
         main(args)
     except:
         if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
