@@ -20,6 +20,12 @@ import random
 import numpy as np
 import torch
 from torch import Tensor
+from enum import Enum
+
+class HDR_TO_SDR(Enum):
+    CLIP_HSL = "clip_hsl"
+    SCALE_MAX = "scale_max"
+    NO_CONVERSION = "no_conversion"
 
 def to_device(data: DATA, device: str) -> DATA:
     return {k: v.to(device, non_blocking=True) if isinstance(v, Tensor) else v for k, v in data.items()}
@@ -38,16 +44,26 @@ def initiate_reproducibility(mode: bool = True) -> None:
 def apply_crop(img: np.ndarray, crop_box: list[int], return_img_w_bbox: bool = False) -> np.ndarray:
     img_cropped = img[crop_box[0]:crop_box[2], crop_box[1]:crop_box[3]]
     if return_img_w_bbox:
-        img_w_bbox = img.copy()
         t = 2 # thickness (2*t+1)
         c = 0 # color
+        n_channels = img.shape[-1]
+        img_w_bbox = img.copy()
+        if n_channels > 4:
+            img_w_bbox = np.expand_dims(img_w_bbox, -1)
+            n_channels = 1
+        elif n_channels == 4:
+            n_channels = 3
+            c = (0, 0, 0, 1)
+        img_w_bbox[..., :n_channels] /= np.maximum(img_w_bbox[..., :n_channels].max((-1, -2, -3), keepdims=True), 1)
         i1, j1 = crop_box[0], crop_box[1]
         i11, j11 = max(i1 - t, 0), max(j1 - t, 0)
         i2, j2 = crop_box[2], crop_box[3]
-        i22, j22 = min(i2 + t, img.shape[0]), min(j2 + t, img.shape[1])
-        img_w_bbox[i11:i1, j11:j22] = c
-        img_w_bbox[i2:i22, j11:j22] = c
-        img_w_bbox[i11:i22, j11:j1] = c
-        img_w_bbox[i11:i22, j2:j22] = c
+        i22, j22 = min(i2 + t, img.shape[-3]), min(j2 + t, img.shape[-2])
+        img_w_bbox[..., i11:i1, j11:j22, :] = c
+        img_w_bbox[..., i2:i22, j11:j22, :] = c
+        img_w_bbox[..., i11:i22, j11:j1, :] = c
+        img_w_bbox[..., i11:i22, j2:j22, :] = c
+        if len(img_w_bbox.shape) > len(img.shape):
+            img_w_bbox = img_w_bbox.squeeze(-1)
         return img_cropped, img_w_bbox
     return img_cropped

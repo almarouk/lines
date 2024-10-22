@@ -15,7 +15,7 @@ import os
 import cv2
 import numpy as np
 import random
-from utils import apply_crop, set_seed
+from utils import apply_crop, set_seed, HDR_TO_SDR
 
 class BoxesDataset:
     _scene_ids = {
@@ -23,7 +23,7 @@ class BoxesDataset:
         "val": [20]
     }
 
-    def __init__(self, data_path: str, to_sdr: bool, max_distance: float, batch_size: int, num_workers: int = 0):
+    def __init__(self, data_path: str, to_sdr: HDR_TO_SDR, max_distance: float, batch_size: int, num_workers: int = 0):
         super().__init__()
         self._rootpath = data_path
         self._to_sdr = to_sdr
@@ -145,7 +145,7 @@ def collate_wrapper(batch: list[DATA]) -> DATA:
 class _Dataset(Dataset):
     def __init__(self,
             files: list[str], root_path: str,
-            to_sdr: bool, max_distance: float,
+            to_sdr: HDR_TO_SDR, max_distance: float,
             augment: bool
         ):
         super().__init__()
@@ -194,10 +194,6 @@ class _Dataset(Dataset):
         # line information is saved in alpha channel
         img_out = cv2.imread(filepath_out, flags)[..., -1]
 
-        if debug:
-            item['raw_in'] = img_in
-            item['raw_out'] = img_out
-
         # TODO use RandomCrop in data augmentation instead?
         # crop image
         crop_factor = 0.5
@@ -220,7 +216,7 @@ class _Dataset(Dataset):
         img_in = img_in[..., :n_channels] + (1 - img_in[..., n_channels:]) * background_color
 
          # HDR to SDR
-        if self._to_sdr:
+        if self._to_sdr == HDR_TO_SDR.CLIP_HSL:
             img_in = cv2.cvtColor(
                 np.clip(
                     cv2.cvtColor(img_in, cv2.COLOR_RGB2HLS),
@@ -229,6 +225,8 @@ class _Dataset(Dataset):
                 ),
                 cv2.COLOR_HLS2RGB
             )
+        elif self._to_sdr == HDR_TO_SDR.SCALE_MAX:
+            img_in /= np.maximum(img_in.max((-1, -2, -3), keepdims=True), 1)
 
         # channels-first order
         img_in = np.transpose(img_in, (2, 0, 1))
@@ -248,7 +246,7 @@ class _Dataset(Dataset):
         _, img_out = cv2.threshold(img_out, self._max_distance, None, cv2.THRESH_TRUNC)
         # img_out = np.clip(img_out, 0, max_distance)
         if debug:
-            item['transformed_out'] = img_out
+            item['transformed_out'] = img_out / self._max_distance
         img_out = Tensor(img_out)
 
         item.update({

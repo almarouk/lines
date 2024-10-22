@@ -18,12 +18,13 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 from dataset import BoxesDataset
 from model import LineDetector
 from loss import Loss
-from utils import to_device, set_seed, initiate_reproducibility
+from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim import Adam, SGD, RMSprop
 from torch.cuda import is_available as is_torch_cuda_available
+from torch.nn.utils import clip_grad_norm_
 from argparse import ArgumentParser
 # from pathlib import Path
 import sys
@@ -34,7 +35,7 @@ import numpy as np
 
 def get_dataset(
         data_path: str,
-        to_sdr: bool,
+        to_sdr: HDR_TO_SDR,
         max_distance: float,
         batch_size: int,
         num_workers: int,
@@ -79,7 +80,7 @@ def get_profiler(profiling: bool, tb_path: str):
 
     return profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        schedule=schedule(skip_first=3, wait=0, warmup=3, active=5, repeat=1),
+        schedule=schedule(skip_first=10, wait=0, warmup=3, active=6, repeat=1),
         on_trace_ready=tensorboard_trace_handler(tb_path),
         record_shapes=True,
         profile_memory=True,
@@ -92,7 +93,7 @@ def save_training(
         scheduler: LRScheduler,
         args: Namespace,
         epoch: int,
-        it_total: int,
+        global_step: int,
         best_val: float):
     ckpt = {
         "model": model.state_dict(),
@@ -100,7 +101,7 @@ def save_training(
         "lr_scheduler": None if scheduler is None else scheduler.state_dict(),
         "args": vars(args),
         "epoch": epoch,
-        "it_total": it_total,
+        "global_step": global_step,
         "best_val": best_val
     }
     torch.save(ckpt, ckpt_path)
@@ -138,12 +139,17 @@ def do_validation(
 def main(args: Namespace) -> None:
     set_seed(args.seed)
     initiate_reproducibility(args.reproducible)
+    if args.detect_anomaly:
+        torch.autograd.detect_anomaly(check_nan=True)
 
     best_val = float("inf")
     dataset = get_dataset(**vars(args))
     train_loader = dataset.get_data_loader('train')
     val_loader = dataset.get_data_loader('val')
     model = get_model(**vars(args))
+    if args.clip_grad_value is not None:
+        for p in model.parameters():
+            p.register_hook(lambda grad: torch.clamp(grad, -args.clip_grad_value, args.clip_grad_value))
     loss_fn = get_loss_fn(**vars(args))
     device = 'cuda' if is_torch_cuda_available() else 'cpu'
     model = model.to(device, non_blocking=True)
@@ -188,7 +194,9 @@ def main(args: Namespace) -> None:
 
     running_loss = 0.
     global_batch_index = 0
+    global_step = 0
     epoch = 0
+    data: DATA
     for epoch in range(args.epochs):
         set_seed(args.seed + epoch)
         model.train()
@@ -200,33 +208,36 @@ def main(args: Namespace) -> None:
                 preds = model(data['tensor_in'])
                 loss: Tensor = loss_fn(preds, data['tensor_out'])
                 loss.backward()
+                if args.clip_grad_norm is not None:
+                    clip_grad_norm_(model.parameters(), args.clip_grad_norm, error_if_nonfinite=True)
                 optimizer.step()
+                global_batch_index += 1
+                global_step += len(data['tensor_in'])
                 if args.debug:
-                    if (global_batch_index + 1) % args.log_every_iters == 0:
-                        writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_batch_index)
+                    if global_batch_index % args.log_every_iters == 0:
+                        writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_step)
                         running_loss = 0.
                     else:
                         running_loss += loss.item()
                 del preds, data, loss
-                global_batch_index += 1
                 if profiling:
                     prof.step()
 
         if args.debug and (epoch + 1) % args.val_every_epochs == 0:
             loss_val = do_validation(args, model, val_loader, device)
-            writer.add_scalar("loss/val", loss_val, global_batch_index)
+            writer.add_scalar("loss/val", loss_val, global_step)
 
             def write_prediction(split: str, tag: str) -> None:
                 data = to_device(dataset.get_samples(split, 5, args.seed), device)
                 writer.add_image(
                     f"Prediction/{tag}/Input",
                     np.concatenate(data["transformed_in"], axis=0),
-                    global_batch_index,
+                    global_step,
                     dataformats="HWC")
                 writer.add_image(
                     f"Prediction/{tag}/Ground Truth",
                     np.concatenate(data["transformed_out"], axis=0),
-                    global_batch_index,
+                    global_step,
                     dataformats="HW")
                 with torch.no_grad():
                     training = model.training
@@ -235,8 +246,8 @@ def main(args: Namespace) -> None:
                     model.train(training)
                 writer.add_image(
                     f"Prediction/{tag}/Output",
-                    torch.cat(list(preds), dim=0),
-                    global_batch_index,
+                    torch.cat(list(preds / args.max_distance), dim=0),
+                    global_step,
                     dataformats="HW")
                 # TODO visualize non-reduced loss as heatmap
                 del data
@@ -254,7 +265,7 @@ def main(args: Namespace) -> None:
                     scheduler=scheduler,
                     args=args,
                     epoch=epoch,
-                    it_total=global_batch_index,
+                    global_step=global_step,
                     best_val=best_val)
                 remove_old_ckpts(args, "_best")
         torch.cuda.empty_cache()
@@ -268,7 +279,7 @@ def main(args: Namespace) -> None:
                 scheduler=scheduler,
                 args=args,
                 epoch=epoch,
-                it_total=global_batch_index,
+                global_step=global_step,
                 best_val=best_val)
             remove_old_ckpts(args)
 
@@ -276,8 +287,8 @@ def get_args_parser() -> ArgumentParser:
     parser = ArgumentParser()
 
     group = parser.add_argument_group("Data")
-    group.add_argument("--data-path", type=str) # Path)
-    group.add_argument("--to-sdr", type=bool, default=True)
+    group.add_argument("--data-path", type=str, required=True) # Path)
+    group.add_argument("--to-sdr", type=str, default=None, choices=[e.value for e in HDR_TO_SDR])
     group.add_argument("--batch-size", type=int, default=8)
     group.add_argument("--num-workers", type=int, default=4)
     group.add_argument("--max-distance", type=float, default=10)
@@ -297,8 +308,11 @@ def get_args_parser() -> ArgumentParser:
 
     group = parser.add_argument_group("Training")
     group.add_argument("--loss", type=str, default="l1", choices=["l1", "l2"])
-    group.add_argument("--output-path", type=str) # Path)
+    group.add_argument("--output-path", type=str, required=True) # Path)
     group.add_argument("--epochs", type=int, default=100)
+    group.add_argument("--clip-grad-norm", type=float, default=None) # default = 1.0
+    group.add_argument("--clip-grad-value", type=float, default=None)
+
     group.add_argument("--val-every-epochs", type=int, default=1)
     group.add_argument("--ckpt-best-val", type=bool, default=True)
     group.add_argument("--ckpt-every-epochs", type=int, default=1)
@@ -310,7 +324,9 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--seed", type=int, default=None)
     group.add_argument("--tag", type=str, default='')
     group.add_argument("--debug", type=bool, default=False)
+    group.add_argument("--detect-anomaly", type=bool, default=False)
     group.add_argument("--profiling", type=bool, default=False)
+    group.add_argument("--suppress-exit", action="store_true")
 
     return parser
 
@@ -323,6 +339,10 @@ def process_args(args: Namespace) -> None:
     args.tb_path = os.path.join(args.output_path, "tensorboard", args.tag)
     if args.seed is None:
         args.seed = 42 # or torch.initial_seed() % 2 ** 32
+    if args.to_sdr is None:
+        args.to_sdr = HDR_TO_SDR.NO_CONVERSION
+    else:
+        args.to_sdr = HDR_TO_SDR(args.to_sdr)
 
 if __name__ == '__main__':
     # TODO:
@@ -339,7 +359,18 @@ if __name__ == '__main__':
     # - log normalized loss relative to max_distance (for comparability)
     # - Tensorboard
     # - Normalize input data (e.g. color values between -1 and 1)
+    # - add __all__ to python modules
 
-    args = get_args_parser().parse_args()
-    process_args(args)
-    main(args)
+    args = None
+    try:
+        args = get_args_parser().parse_args()
+        process_args(args)
+        main(args)
+    except:
+        if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
+            import traceback
+            traceback.print_exc()
+            print("\n---------- The above exception has been suppressed on exit ----------\n")
+            sys.exit(0)
+        else:
+            raise
