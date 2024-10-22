@@ -343,6 +343,30 @@ def process_args(args: Namespace) -> None:
     else:
         args.to_sdr = HDR_TO_SDR(args.to_sdr)
 
+def trace_dev(file_path: str, tag: str) -> None:
+    import sys
+    import subprocess
+    with open(file_path, 'w') as f:
+        f.write("\n\n---------- tag with datetime: ----------\n\n")
+        f.write(tag)
+        f.write("\n\n---------- sys.argv (one line) ----------\n\n")
+        f.write(" ".join(sys.argv))
+        f.write("\n\n---------- sys.argv (multiline) ----------\n\n")
+        f.write("\n".join(sys.argv))
+        cwd = os.path.abspath(os.path.dirname(sys.argv[0]))
+        f.write("\n\n---------- cwd ----------\n\n")
+        f.write(cwd)
+        for cmd in [
+            "hostname",
+            "git rev-parse HEAD",
+            "git status",
+            "git log --max-count=10"
+        ]:
+            f.write(f"\n\n---------- {cmd} ----------\n\n")
+            f.flush()
+            subprocess.run(cmd, encoding='ascii', stdout=f, stderr=f, text=True, cwd=cwd)
+            f.flush()
+
 if __name__ == '__main__':
     # TODO:
     # - add data augmentation
@@ -364,10 +388,7 @@ if __name__ == '__main__':
     try:
         args = get_args_parser().parse_args()
         process_args(args)
-        with open(os.path.join(args.training_path, "command.txt"), 'w') as f:
-            f.write(" ".join(sys.argv))
-            f.write("\n\n")
-            f.write("\n".join(sys.argv))
+        trace_dev(os.path.join(args.training_path, "dev_info.txt"), args.tag)
         main(args)
     except:
         if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
