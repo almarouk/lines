@@ -18,7 +18,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 from dataset import BoxesDataset
 from model import LineDetector
 from loss import Loss
-from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR
+from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR, str2bool
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -211,11 +211,10 @@ def main(args: Namespace) -> None:
                 global_batch_index += 1
                 global_step += len(data['tensor_in'])
                 if args.debug:
+                    running_loss += loss.item()
                     if global_batch_index % args.log_every_iters == 0:
                         writer.add_scalar("loss/train", running_loss / args.log_every_iters, global_step)
                         running_loss = 0.
-                    else:
-                        running_loss += loss.item()
                 del preds, data, loss
                 if profiling:
                     prof.step()
@@ -291,7 +290,7 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--max-distance", type=float, default=10)
 
     group = parser.add_argument_group("Model")
-    group.add_argument("--clamp-output", type=bool, default=False)
+    group.add_argument("--clamp-output", type=str2bool, default=False)
     group.add_argument("--size", type=int, default=32)
 
     group = parser.add_argument_group("Optimizer")
@@ -311,19 +310,19 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--clip-grad-value", type=float, default=None)
 
     group.add_argument("--val-every-epochs", type=int, default=1)
-    group.add_argument("--ckpt-best-val", type=bool, default=True)
+    group.add_argument("--ckpt-best-val", type=str2bool, default=True)
     group.add_argument("--ckpt-every-epochs", type=int, default=1)
     group.add_argument("--keep-last-ckpts", type=int, default=1)
     group.add_argument("--log-every-iters", type=int, default=10)
 
     group = parser.add_argument_group("Other")
-    group.add_argument("--reproducible", type=bool, default=False)
+    group.add_argument("--reproducible", type=str2bool, default=False)
     group.add_argument("--seed", type=int, default=None)
     group.add_argument("--tag", type=str, default='')
-    group.add_argument("--debug", type=bool, default=False)
-    group.add_argument("--detect-anomaly", type=bool, default=False)
-    group.add_argument("--profiling", type=bool, default=False)
-    group.add_argument("--suppress-exit", action="store_true")
+    group.add_argument("--debug", type=str2bool, default=False)
+    group.add_argument("--detect-anomaly", type=str2bool, default=False)
+    group.add_argument("--profiling", type=str2bool, default=False)
+    group.add_argument("--suppress-exit", type=str2bool, default=False)
 
     return parser
 
