@@ -351,24 +351,26 @@ def trace_dev(args: Namespace) -> None:
     with open(file_path, 'w') as f:
         f.write("\n\n---------- tag with datetime: ----------\n\n")
         f.write(args.tag)
-        f.write("\n\n---------- sys.argv (one line) ----------\n\n")
+        f.write("\n\n---------- sys.argv ----------\n\n")
         f.write(" ".join(sys.argv))
-        f.write("\n\n---------- sys.argv (multiline) ----------\n\n")
-        f.write("\n".join(sys.argv))
         f.write("\n\n---------- args ----------\n\n")
         f.write(json.dumps(vars(args), default=lambda x: str(x), indent=4))
         cwd = os.path.abspath(os.path.dirname(sys.argv[0]))
         f.write("\n\n---------- cwd ----------\n\n")
         f.write(cwd)
+        git = f"git -c safe.directory=\"{cwd}\""
         for cmd in [
+            "whoami",
+            "echo $USER",
             "hostname",
-            "git rev-parse HEAD",
-            "git status",
-            "git log --max-count=10"
+            f"{git} rev-parse HEAD",
+            f"{git} status",
+            f"{git} log --max-count=10",
+            "printenv"
         ]:
             f.write(f"\n\n---------- {cmd} ----------\n\n")
             f.flush()
-            subprocess.run(cmd, encoding='ascii', stdout=f, stderr=f, text=True, cwd=cwd)
+            subprocess.run(cmd, encoding='ascii', stdout=f, stderr=f, text=True, cwd=cwd, shell=True)
             f.flush()
 
 if __name__ == '__main__':
