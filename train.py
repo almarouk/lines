@@ -171,6 +171,8 @@ def main(args: Namespace) -> None:
                 "Total Loss": ["Multiline", ["loss/train", "loss/val"]]
             }
         })
+        with open(args.trace_dev_path, 'r') as f:
+            writer.add_text("dev info", f.read())
 
         data = to_device(dataset.get_samples("train", 5, args.seed), device)
         writer.add_graph(model, data['tensor_in'])
@@ -333,6 +335,7 @@ def process_args(args: Namespace) -> None:
     args.tag = f"{args.tag}_{time.strftime("%Y%m%d-%H%M%S")}"
     args.training_path = os.path.join(args.output_path, "training", args.tag)
     args.tb_path = os.path.join(args.output_path, "tensorboard", args.tag)
+    args.trace_dev_path = os.path.join(args.training_path, "dev_info.txt")
     os.makedirs(args.training_path, exist_ok=True)
     os.makedirs(args.tb_path, exist_ok=True)
     if args.seed is None:
@@ -346,8 +349,7 @@ def trace_dev(args: Namespace) -> None:
     import sys
     import subprocess
     import json
-    file_path = os.path.join(args.training_path, "dev_info.txt")
-    with open(file_path, 'w') as f:
+    with open(args.trace_dev_path, 'w') as f:
         f.write("\n\n---------- tag with datetime: ----------\n\n")
         f.write(args.tag)
         f.write("\n\n---------- sys.argv ----------\n\n")
@@ -388,6 +390,7 @@ if __name__ == '__main__':
     # - Tensorboard
     # - Normalize input data (e.g. color values between -1 and 1)
     # - add __all__ to python modules
+    # - handle logging to multiple outputs/channels
 
     args = None
     try:
