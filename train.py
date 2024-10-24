@@ -228,16 +228,17 @@ def main(args: Namespace) -> None:
 
             def write_prediction(split: str, tag: str) -> None:
                 data = to_device(dataset.get_samples(split, 5, args.seed), device)
-                writer.add_image(
-                    f"Prediction/{tag}/Input",
-                    np.concatenate(data["transformed_in"], axis=0),
-                    global_step,
-                    dataformats="HWC")
-                writer.add_image(
-                    f"Prediction/{tag}/Ground Truth",
-                    np.concatenate(data["transformed_out"], axis=0),
-                    global_step,
-                    dataformats="HW")
+                if (epoch + 1) == args.val_every_epochs:
+                    writer.add_image(
+                        f"Prediction/{tag}/Input",
+                        np.concatenate(data["transformed_in"], axis=0),
+                        global_step,
+                        dataformats="HWC")
+                    writer.add_image(
+                        f"Prediction/{tag}/Ground Truth",
+                        np.concatenate(data["transformed_out"], axis=0),
+                        global_step,
+                        dataformats="HW")
                 with torch.no_grad():
                     training = model.training
                     model.eval()
