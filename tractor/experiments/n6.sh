@@ -14,7 +14,7 @@ python /s/apps/users/almarouka/line-detection/repo/train.py \
     --num-workers 4 \
     --max-distance 10 \
     \
-    --clamp-output true \
+    --clamp-output false \
     --size 32 \
     \
     --optimizer adam \
@@ -24,7 +24,7 @@ python /s/apps/users/almarouka/line-detection/repo/train.py \
     \
     --loss l1 \
     --output-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/" \
-    --tag "n5" \
+    --tag "debug_cuda" \
     --epochs 100 \
     --clip-grad-norm 1.0 \
     \

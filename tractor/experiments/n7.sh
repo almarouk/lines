@@ -10,12 +10,13 @@ python /s/apps/users/almarouka/line-detection/repo/train.py \
     \
     --data-path "/s/prods/mvg/_source_global/users/almarouka/datasets/topology_dataset/output/" \
     --to-sdr "scale_max" \
-    --batch-size 4 \
+    --batch-size 2 \
     --num-workers 4 \
     --max-distance 10 \
     \
+    --backbone attention_unet \
     --clamp-output true \
-    --size 32 \
+    --size 16 \
     \
     --optimizer adam \
     --learning-rate 0.0001 \
@@ -24,8 +25,8 @@ python /s/apps/users/almarouka/line-detection/repo/train.py \
     \
     --loss l1 \
     --output-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/" \
-    --tag "n5" \
-    --epochs 100 \
+    --tag "attention_16_l1_2_scalemax_clamp" \
+    --epochs 50 \
     --clip-grad-norm 1.0 \
     \
     --val-every-epochs 1 \

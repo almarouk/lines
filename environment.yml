@@ -1,11 +1,22 @@
-name: line_detection
+name: line-detection
 channels:
+  # - pytorch
+  # - nvidia
   - conda-forge
   - defaults
 dependencies:
+  - python >=3.8
+  - numpy
+  - opencv
+  - pip
   # - autopep8
   # - pylint
-  - pytorch
-  - pytorch-cuda
-  - torchvision
-  - opencv
+  # - pip:
+    # - torch torchvision --index-url https://download.pytorch.org/whl/cu124
+    # - pytorch
+    # - pytorch-cuda
+    # - torchvision
+    # - torch_tb_profiler
+
+# conda env create -p /s/apps/users/almarouka/conda/envs/line-detection --file environment.yml
+# conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
