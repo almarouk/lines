@@ -28,6 +28,10 @@ class HDR_TO_SDR(Enum):
     SCALE_MAX = "scale_max"
     NO_CONVERSION = "no_conversion"
 
+class BACKBONE(Enum):
+    VGG_UNET = "attention_unet"
+    ATTENTION_UNET = "vgg_unet"
+
 def to_device(data: DATA, device: str) -> DATA:
     return {k: v.to(device, non_blocking=True) if isinstance(v, Tensor) else v for k, v in data.items()}
 

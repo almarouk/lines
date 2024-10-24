@@ -18,7 +18,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 from dataset import BoxesDataset
 from model import LineDetector
 from loss import Loss
-from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR, str2bool
+from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR, str2bool, BACKBONE
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -47,9 +47,10 @@ def get_model(
         size: int,
         max_distance: float,
         clamp_output: bool,
+        backbone: BACKBONE,
         **kwargs
     ) -> LineDetector:
-    return LineDetector(size, max_distance, clamp_output)
+    return LineDetector(size, max_distance, clamp_output, backbone)
 
 def get_loss_fn(
         loss: str,
@@ -292,6 +293,7 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--max-distance", type=float, default=10)
 
     group = parser.add_argument_group("Model")
+    group.add_argument("--backbone", type=str, default=None, choices=[e.value for e in BACKBONE])
     group.add_argument("--clamp-output", type=str2bool, default=False)
     group.add_argument("--size", type=int, default=32)
 
@@ -340,10 +342,8 @@ def process_args(args: Namespace) -> None:
     os.makedirs(args.tb_path, exist_ok=True)
     if args.seed is None:
         args.seed = 42 # or torch.initial_seed() % 2 ** 32
-    if args.to_sdr is None:
-        args.to_sdr = HDR_TO_SDR.NO_CONVERSION
-    else:
-        args.to_sdr = HDR_TO_SDR(args.to_sdr)
+    args.to_sdr = HDR_TO_SDR.NO_CONVERSION if args.to_sdr is None else HDR_TO_SDR(args.to_sdr)
+    args.backbone = BACKBONE.VGG_UNET if args.backbone is None else BACKBONE(args.backbone)
 
 def trace_dev(args: Namespace) -> None:
     import sys
