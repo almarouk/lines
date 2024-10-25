@@ -8,7 +8,11 @@ conda activate /s/apps/users/almarouka/conda/envs/line-detection
 #launch command
 python /s/apps/users/almarouka/line-detection/repo/test.py \
     --data-path "/s/prods/mvg/_source_global/users/almarouka/datasets/topology_dataset/output/" \
+    --tag "boxes_no_texture" \
     --ckpt-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/experiment3/ckpt_0092_best.tar" \
     --batch-size 8 \
-    --num-workers 4 \
-    --output-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/experiment3_test/"
+    --num-workers 8 \
+    --output-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/" \
+    ---seed 42\
+    --suppress-exit true \
+
