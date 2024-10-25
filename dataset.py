@@ -207,21 +207,23 @@ class _Dataset(Dataset):
         flags = cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED
         filepath_in = os.path.join(self._root_path, self._files[index][0])
         filepath_out = os.path.join(self._root_path, self._files[index][1])
-        img_in = cv2.cvtColor(cv2.imread(filepath_in, flags), cv2.COLOR_BGRA2RGBA)
+        img_in_ = cv2.cvtColor(cv2.imread(filepath_in, flags), cv2.COLOR_BGRA2RGBA)
         # line information is saved in alpha channel
-        img_out = cv2.imread(filepath_out, flags)[..., -1]
+        img_out_ = cv2.imread(filepath_out, flags)[..., -1]
 
         n = 4 if self._full_image else 1
         for k in range(n):
             item : DATA = {}
+            img_in = img_in_
+            img_out = img_out_
             # TODO use RandomCrop in data augmentation instead?
             # crop image
             crop_factor = 0.5
             initial_shape = np.array(img_in.shape[:2])
             crop_shape = np.floor(crop_factor * initial_shape).astype(int)
             if self._full_image:
-                i = crop_shape[0] * (k // 2)
-                j = crop_shape[1] * (k % 2)
+                i = int(crop_shape[0] * (k // 2))
+                j = int(crop_shape[1] * (k % 2))
             else:
                 i, j = np.random.randint(0, np.ceil((1 - crop_factor) * initial_shape))
             crop_box = [i, j, i + crop_shape[0], j + crop_shape[1]]

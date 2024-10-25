@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
+    from utils import DATA
     from torch.nn import Module
     from torch import Tensor
 
@@ -14,7 +15,7 @@ from torch.cuda import is_available as is_torch_cuda_available
 from argparse import ArgumentParser, Namespace
 import cv2
 import numpy as np
-from utils import DATA, to_device, str2bool
+from utils import to_device, str2bool
 from common import get_dataset, get_model
 
 def run(args: Namespace) -> None:
@@ -52,18 +53,19 @@ def run(args: Namespace) -> None:
         with torch.no_grad():
             tensor_in = tensor_in.to(device, non_blocking=True)
             predictions : Tensor = model(tensor_in)
-            predictions = predictions.view(n, 4, *predictions.shape[2:])
+            print(predictions.shape)
+            predictions = predictions.reshape(n, 4, *predictions.shape[1:])
             predictions = predictions.detach().cpu().numpy()
         for l in range(n):
             prediction = predictions[l]
             img = np.zeros((
                 prediction.shape[1] * 2 + offset,
                 prediction.shape[2] * 2 + offset
-            ))
+            ), dtype=np.uint8)
             for k in range(4):
                 i = (k // 2) * (prediction.shape[1] + offset)
                 j = (k % 2) * (prediction.shape[2] + offset)
-                img[i:i+prediction.shape[1], j:j+prediction.shape[2]] = prediction[k] * 255 / max_distance
+                img[i:i+prediction.shape[1], j:j+prediction.shape[2]] = (prediction[k] * 255 / max_distance).astype(np.uint8)
             pred_path = os.path.join(
                 args.testing_path,
                 os.path.splitext(os.path.basename(data['filepath_out'][l][0]))[0] + ".png"
@@ -82,6 +84,8 @@ def get_args_parser() -> ArgumentParser:
     parser.add_argument("--tag", type=str, default='')
     parser.add_argument("--suppress-exit", type=str2bool, default=False)
 
+    return parser
+
 def process_args(args: Namespace) -> None:
     import time
     args.tag = f"{args.tag}_{time.strftime("%Y%m%d-%H%M%S")}"
@@ -94,6 +98,7 @@ if __name__ == '__main__':
 
     args = None
     try:
+        print(sys.argv)
         args = get_args_parser().parse_args()
         process_args(args)
         run(args)
