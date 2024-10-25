@@ -20,7 +20,8 @@ from utils import apply_crop, set_seed, HDR_TO_SDR
 class BoxesDataset:
     _scene_ids = {
         "train": list(range(1, 20)),
-        "val": [20]
+        "val": [20],
+        "test": [20]
     }
 
     def __init__(self, data_path: str, to_sdr: HDR_TO_SDR, max_distance: float, batch_size: int, num_workers: int = 0):
@@ -54,6 +55,7 @@ class BoxesDataset:
     def get_data_loader(self, split: str) -> DataLoader:
         assert split in self._scene_ids
         is_train = split == "train"
+        is_test = split == "test"
         # TODO replace list of string by numpy array in case of multiple workers
         # See https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
         return DataLoader(
@@ -62,7 +64,9 @@ class BoxesDataset:
                 root_path=self._rootpath,
                 to_sdr=self._to_sdr,
                 max_distance=self._max_distance,
-                augment=is_train
+                augment=is_train,
+                debug=False,
+                full_image=is_test
             ),
             batch_size=self._batch_size,
             shuffle=is_train,
@@ -77,7 +81,7 @@ class BoxesDataset:
         )
     
     def get_samples(self, split: str, n_samples: int, seed: int) -> DATA:
-        assert split in self._scene_ids
+        assert split in ["train", "val"]
         is_train = split == "train"
         loader = DataLoader(
             dataset=_Dataset(
@@ -85,9 +89,11 @@ class BoxesDataset:
                 root_path=self._rootpath,
                 to_sdr=self._to_sdr,
                 max_distance=self._max_distance,
-                augment=is_train
+                augment=is_train,
+                debug=True,
+                full_image=False
             ),
-            batch_sampler=OneBatchSampler(n_samples, len(self._files[split]), True, seed),
+            batch_sampler=OneBatchSampler(n_samples, len(self._files[split]), seed),
             num_workers=1,
             pin_memory=True,
             worker_init_fn=worker_init_fn(seed),
@@ -100,19 +106,43 @@ class BoxesDataset:
 
 class OneBatchSampler(Sampler[List[int]]):
 
-    def __init__(self, n_samples: int, n_data, debug: bool, seed: int) -> None:
+    def __init__(self, n_samples: int, n_data: int, seed: int) -> None:
         self.n_samples = n_samples
         self.n_data = n_data
-        self.debug = debug
         self.seed = seed
 
     def __iter__(self) -> Iterator[List[int]]:
         generator = torch.Generator()
         generator.manual_seed(self.seed)
-        yield [(int(i), self.debug) for i in torch.randperm(self.n_data, generator=generator)[:self.n_samples]]
+        yield [int(i) for i in torch.randperm(self.n_data, generator=generator)[:self.n_samples]]
 
     def __len__(self) -> int:
         return 1
+
+# class TestBatchSampler(Sampler[List[int]]):
+
+#     def __init__(self, batch_size: int, n_data: int, seed: int) -> None:
+#         self.batch_size = batch_size
+#         self.n_data = n_data
+#         self.seed = seed
+
+#     def __iter__(self) -> Iterator[List[int]]:
+#         batch = [None] * self.batch_size
+#         idx_in_batch = 0
+#         for idx in range(self.batch_size):
+#             for patch in range(4):
+#                 batch[idx_in_batch] = (idx, patch)
+#                 idx_in_batch += 1
+#                 if idx_in_batch == self.batch_size:
+#                     yield batch
+#                     idx_in_batch = 0
+#                     batch = [0] * self.batch_size
+#         if idx_in_batch > 0:
+#             yield batch[:idx_in_batch]
+#         yield [(int(i)) for i in torch.randperm(self.n_data, generator=generator)[:self.batch_size]]
+
+#     def __len__(self) -> int:
+#         return  (len(self.n_data) + self.batch_size - 1) // self.batch_size
 
 class worker_init_fn(_worker_init_fn_t):
     def __init__(self, seed: int | None = None) -> None:
@@ -132,21 +162,33 @@ class worker_init_fn(_worker_init_fn_t):
         set_seed(worker_seed)
         # or only set seed of numpy and python since pytorch's seed is already set correctly
 
-def collate_wrapper(batch: list[DATA]) -> DATA:
+def collate_wrapper(batch: list[list[DATA]]) -> DATA:
     # custom collate function that doesn't cast non-tensor values to tensors
     batch_collated : DATA = {}
-    elem = batch[0]
+    full_image = len(batch[0]) > 1
+    elem = batch[0][0]
     for key in elem.keys():
-        batch_collated[key] = [d[key] for d in batch]
         if isinstance(elem[key], Tensor):
-            batch_collated[key] = default_collate(batch_collated[key])
+            if full_image:
+                batch_collated[key] = default_collate([
+                    default_collate([d[key] for d in t])
+                    for t in batch])
+            else:
+                batch_collated[key] = default_collate([t[0][key] for t in batch])
+                
+        else:
+            if full_image:
+                batch_collated[key] = [[d[key] for d in t] for t in batch]
+            else:
+                batch_collated[key] = [t[0][key] for t in batch]
     return batch_collated
 
 class _Dataset(Dataset):
     def __init__(self,
             files: list[str], root_path: str,
             to_sdr: HDR_TO_SDR, max_distance: float,
-            augment: bool
+            augment: bool, debug: bool,
+            full_image: bool
         ):
         super().__init__()
         self._files = files
@@ -154,6 +196,8 @@ class _Dataset(Dataset):
         self._to_sdr = to_sdr
         self._max_distance = max_distance
         self._augment = augment
+        self._debug = debug
+        self._full_image = full_image
         self._init()
 
     def _init(self):
@@ -180,11 +224,9 @@ class _Dataset(Dataset):
             ])
 
     @override
-    def __getitem__(self, index) -> DATA:
-        debug = False
-        if isinstance(index, tuple):
-            index, debug = index
-        item : DATA = {}
+    def __getitem__(self, index) -> list[DATA]:
+        debug = self._debug
+        items : list[DATA] = []
 
         # IMREAD_UNCHANGED to read alpha channel
         flags = cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED
@@ -194,69 +236,77 @@ class _Dataset(Dataset):
         # line information is saved in alpha channel
         img_out = cv2.imread(filepath_out, flags)[..., -1]
 
-        # TODO use RandomCrop in data augmentation instead?
-        # crop image
-        crop_factor = 0.5
-        initial_shape = np.array(img_in.shape[:2])
-        crop_shape = np.floor(crop_factor * initial_shape).astype(int)
-        i, j = np.random.randint(0, np.ceil((1 - crop_factor) * initial_shape))
-        crop_box = [i, j, i + crop_shape[0], j + crop_shape[1]]
-        if debug:
-            item['crop_box'] = crop_box
-            img_in, item['raw_in'] = apply_crop(img_in, crop_box, True)
-            img_out, item['raw_out'] = apply_crop(img_out, crop_box, True)
-        else:
-            img_in = apply_crop(img_in, crop_box)
-            img_out = apply_crop(img_out, crop_box)
+        n = 4 if self._full_image else 1
+        for k in range(n):
+            item : DATA = {}
+            # TODO use RandomCrop in data augmentation instead?
+            # crop image
+            crop_factor = 0.5
+            initial_shape = np.array(img_in.shape[:2])
+            crop_shape = np.floor(crop_factor * initial_shape).astype(int)
+            if self._full_image:
+                i = crop_shape[0] * (k // 2)
+                j = crop_shape[1] * (k % 2)
+            else:
+                i, j = np.random.randint(0, np.ceil((1 - crop_factor) * initial_shape))
+            crop_box = [i, j, i + crop_shape[0], j + crop_shape[1]]
+            if debug: # TODO add condition for full_image
+                item['crop_box'] = crop_box
+                img_in, item['raw_in'] = apply_crop(img_in, crop_box, True)
+                img_out, item['raw_out'] = apply_crop(img_out, crop_box, True)
+            else:
+                img_in = apply_crop(img_in, crop_box)
+                img_out = apply_crop(img_out, crop_box)
 
-        # add random uniform background and apply alpha blending
-        # note that the foreground is pre-multiplied by alpha in EXR format
-        n_channels : int = img_in.shape[-1] - 1
-        background_color = np.random.random_sample(n_channels).astype(np.float32)
-        img_in = img_in[..., :n_channels] + (1 - img_in[..., n_channels:]) * background_color
+            # add random uniform background and apply alpha blending
+            # note that the foreground is pre-multiplied by alpha in EXR format
+            n_channels : int = img_in.shape[-1] - 1
+            background_color = np.random.random_sample(n_channels).astype(np.float32)
+            img_in = img_in[..., :n_channels] + (1 - img_in[..., n_channels:]) * background_color
 
-         # HDR to SDR
-        if self._to_sdr == HDR_TO_SDR.CLIP_HSL:
-            img_in = cv2.cvtColor(
-                np.clip(
-                    cv2.cvtColor(img_in, cv2.COLOR_RGB2HLS),
-                    (0, 0, 0), (360, 1, 1),
-                    dtype=img_in.dtype
-                ),
-                cv2.COLOR_HLS2RGB
-            )
-        elif self._to_sdr == HDR_TO_SDR.SCALE_MAX:
-            img_in /= np.maximum(img_in.max((-1, -2, -3), keepdims=True), 1)
+            # HDR to SDR
+            if self._to_sdr == HDR_TO_SDR.CLIP_HSL:
+                img_in = cv2.cvtColor(
+                    np.clip(
+                        cv2.cvtColor(img_in, cv2.COLOR_RGB2HLS),
+                        (0, 0, 0), (360, 1, 1),
+                        dtype=img_in.dtype
+                    ),
+                    cv2.COLOR_HLS2RGB
+                )
+            elif self._to_sdr == HDR_TO_SDR.SCALE_MAX:
+                img_in /= np.maximum(img_in.max((-1, -2, -3), keepdims=True), 1)
 
-        # channels-first order
-        img_in = np.transpose(img_in, (2, 0, 1))
+            # channels-first order
+            img_in = np.transpose(img_in, (2, 0, 1))
 
-        # transform data
-        img_in = Tensor(img_in)
-        if self._augment:
-            img_in = self.transforms_augment(img_in)
-        if debug:
-            item['transformed_in'] = np.transpose(img_in.numpy(), (1, 2, 0))
-        img_in : Tensor = self.preprocess(img_in)
+            # transform data
+            img_in = Tensor(img_in)
+            if self._augment:
+                img_in = self.transforms_augment(img_in)
+            if debug:
+                item['transformed_in'] = np.transpose(img_in.numpy(), (1, 2, 0))
+            img_in : Tensor = self.preprocess(img_in)
 
-        # compute distance field
-        img_out = np.round(img_out * 255).astype(np.uint8)
-        _, img_out = cv2.threshold(img_out, 0, 255 / 2, cv2.THRESH_BINARY_INV)
-        img_out = cv2.distanceTransform(img_out, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
-        _, img_out = cv2.threshold(img_out, self._max_distance, None, cv2.THRESH_TRUNC)
-        # img_out = np.clip(img_out, 0, max_distance)
-        if debug:
-            item['transformed_out'] = img_out / self._max_distance
-        img_out = Tensor(img_out)
+            # compute distance field
+            img_out = np.round(img_out * 255).astype(np.uint8)
+            _, img_out = cv2.threshold(img_out, 0, 255 / 2, cv2.THRESH_BINARY_INV)
+            img_out = cv2.distanceTransform(img_out, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+            _, img_out = cv2.threshold(img_out, self._max_distance, None, cv2.THRESH_TRUNC)
+            # img_out = np.clip(img_out, 0, max_distance)
+            if debug:
+                item['transformed_out'] = img_out / self._max_distance
+            img_out = Tensor(img_out)
 
-        item.update({
-            'tensor_in': img_in,
-            'tensor_out': img_out,
-            'filepath_in': filepath_in,
-            'filepath_out': filepath_out
-        })
+            item.update({
+                'tensor_in': img_in,
+                'tensor_out': img_out,
+                'filepath_in': filepath_in,
+                'filepath_out': filepath_out
+            })
+            items.append(item)
 
-        return item
+        return items
 
     @override
     def __len__(self) -> int:

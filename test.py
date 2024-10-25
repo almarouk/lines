@@ -8,56 +8,69 @@ import os
 # should be placed BEFORE importing opencv
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
+import sys
 import torch
 from torch.cuda import is_available as is_torch_cuda_available
-from Dataset import BoxesDataset
-from Model import LineDetector
 from argparse import ArgumentParser, Namespace
 import cv2
-from utils import DATA, to_device
-
-def get_dataset(data_path: str, batch_size: int, max_distance: float, num_workers: int):
-    return BoxesDataset(data_path, batch_size, max_distance, num_workers)
-
-def get_model(max_distance: float, clamp_output: bool) -> Module:
-    return LineDetector(max_distance, clamp_output)
+import numpy as np
+from utils import DATA, to_device, str2bool
+from common import get_dataset, get_model
 
 def run(args: Namespace) -> None:
     ckpt = torch.load(args.ckpt_path, map_location='cpu')
-    max_distance = ckpt['args']['max_distance']
-    clamp_output = ckpt['args']['clamp_output']
+    for k, v in ckpt['args'].items():
+        if k not in args:
+            setattr(args, k, v)
 
-    dataset = get_dataset(args.data_path, args.batch_size, max_distance, args.num_workers)
-    data_loader = dataset.get_data_loader('val')
+    args.testing_path = os.path.join(
+        args.output_path,
+        "testing",
+        ckpt['args']['tag'],
+        os.path.splitext(os.path.basename(args.ckpt_path))[0],
+        args.tag
+    )
+    os.makedirs(args.testing_path, exist_ok=True)
+    max_distance = args.max_distance
 
-    model = get_model(max_distance, clamp_output)
+    dataset = get_dataset(**vars(args))
+    data_loader = dataset.get_data_loader('test')
+
+    model = get_model(**vars(args))
     model.load_state_dict(ckpt['model'])
     device = 'cuda' if is_torch_cuda_available() else 'cpu'
     model = model.to(device, non_blocking=True)
     model.eval()
 
-    if not os.path.exists(args.output_path):
-        os.makedirs(args.output_path)
+    offset = 5 # between patches
+
     data: DATA
     for data in data_loader:
-        images = data['tensor_in'].detach().cpu().numpy()
-        ground_truths = data['tensor_out'].detach().cpu().numpy()
+        tensor_in = data['tensor_in']
+        n = tensor_in.shape[0]
+        tensor_in = tensor_in.reshape(n * 4, *tensor_in.shape[2:])
         with torch.no_grad():
-            data = to_device(data, device)
-            predictions : Tensor = model(data['tensor_in'])
+            tensor_in = tensor_in.to(device, non_blocking=True)
+            predictions : Tensor = model(tensor_in)
+            predictions = predictions.view(n, 4, *predictions.shape[2:])
             predictions = predictions.detach().cpu().numpy()
-        images = images.transpose((0, 2, 3, 1))
-        for i in range(len(images)):
-            image = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
-            ground_truth = ground_truths[i] * 255 / max_distance
-            prediction = predictions[i] * 255 / max_distance
-            cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_img.exr"), image)
-            cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_gt.png"), ground_truth)
-            cv2.imwrite(os.path.join(args.output_path, f"{i:04d}_pred.png"), prediction)
+        for l in range(n):
+            prediction = predictions[l]
+            img = np.zeros((
+                prediction.shape[1] * 2 + offset,
+                prediction.shape[2] * 2 + offset
+            ))
+            for k in range(4):
+                i = (k // 2) * (prediction.shape[1] + offset)
+                j = (k % 2) * (prediction.shape[2] + offset)
+                img[i:i+prediction.shape[1], j:j+prediction.shape[2]] = prediction[k] * 255 / max_distance
+            pred_path = os.path.join(
+                args.testing_path,
+                os.path.splitext(os.path.basename(data['filepath_out'][l][0]))[0] + ".png"
+            )
+            cv2.imwrite(pred_path, prediction)
 
-if __name__ == '__main__':
-    # TODO:
-
+def get_args_parser() -> ArgumentParser:
     parser = ArgumentParser()
 
     parser.add_argument("--data-path", type=str)
@@ -65,7 +78,30 @@ if __name__ == '__main__':
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--output-path", type=str)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--tag", type=str, default='')
+    parser.add_argument("--suppress-exit", type=str2bool, default=False)
 
-    args = parser.parse_args()
+def process_args(args: Namespace) -> None:
+    import time
+    args.tag = f"{args.tag}_{time.strftime("%Y%m%d-%H%M%S")}"
+    if args.seed is None:
+        args.seed = 42 # or torch.initial_seed() % 2 ** 32
+    args.batch_size = max(1, args.batch_size // 4)
 
-    run(args)
+if __name__ == '__main__':
+    # TODO:
+
+    args = None
+    try:
+        args = get_args_parser().parse_args()
+        process_args(args)
+        run(args)
+    except:
+        if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
+            import traceback
+            traceback.print_exc()
+            print("\n---------- The above exception has been suppressed on exit ----------\n")
+            sys.exit(0)
+        else:
+            raise
