@@ -119,31 +119,6 @@ class OneBatchSampler(Sampler[List[int]]):
     def __len__(self) -> int:
         return 1
 
-# class TestBatchSampler(Sampler[List[int]]):
-
-#     def __init__(self, batch_size: int, n_data: int, seed: int) -> None:
-#         self.batch_size = batch_size
-#         self.n_data = n_data
-#         self.seed = seed
-
-#     def __iter__(self) -> Iterator[List[int]]:
-#         batch = [None] * self.batch_size
-#         idx_in_batch = 0
-#         for idx in range(self.batch_size):
-#             for patch in range(4):
-#                 batch[idx_in_batch] = (idx, patch)
-#                 idx_in_batch += 1
-#                 if idx_in_batch == self.batch_size:
-#                     yield batch
-#                     idx_in_batch = 0
-#                     batch = [0] * self.batch_size
-#         if idx_in_batch > 0:
-#             yield batch[:idx_in_batch]
-#         yield [(int(i)) for i in torch.randperm(self.n_data, generator=generator)[:self.batch_size]]
-
-#     def __len__(self) -> int:
-#         return  (len(self.n_data) + self.batch_size - 1) // self.batch_size
-
 class worker_init_fn(_worker_init_fn_t):
     def __init__(self, seed: int | None = None) -> None:
         self.seed = seed
