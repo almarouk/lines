@@ -53,7 +53,6 @@ def run(args: Namespace) -> None:
         with torch.no_grad():
             tensor_in = tensor_in.to(device, non_blocking=True)
             predictions : Tensor = model(tensor_in)
-            print(predictions.shape)
             predictions = predictions.reshape(n, 4, *predictions.shape[1:])
             predictions = predictions.detach().cpu().numpy()
         for l in range(n):
@@ -70,7 +69,7 @@ def run(args: Namespace) -> None:
                 args.testing_path,
                 os.path.splitext(os.path.basename(data['filepath_out'][l][0]))[0] + ".png"
             )
-            cv2.imwrite(pred_path, prediction)
+            cv2.imwrite(pred_path, img)
 
 def get_args_parser() -> ArgumentParser:
     parser = ArgumentParser()
@@ -98,7 +97,6 @@ if __name__ == '__main__':
 
     args = None
     try:
-        print(sys.argv)
         args = get_args_parser().parse_args()
         process_args(args)
         run(args)
