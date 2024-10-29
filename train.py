@@ -15,7 +15,7 @@ import os
 # should be placed BEFORE importing opencv
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
-from loss import Loss
+from loss import get_loss_fn
 from utils import to_device, set_seed, initiate_reproducibility, HDR_TO_SDR, str2bool, BACKBONE
 from common import get_dataset, get_model
 
@@ -31,14 +31,6 @@ import glob
 import re
 from contextlib import nullcontext
 import numpy as np
-
-def get_loss_fn(
-        loss: str,
-        max_distance: float,
-        reduction: str = "mean",
-        **kwargs
-    ) -> Loss:
-    return Loss(loss, max_distance, reduction)
 
 def get_optimizer_fn(optimizer: str) -> type[Optimizer]:
     return {'adam': Adam, 'sgd': SGD, 'rmsprop': RMSprop}[optimizer]
@@ -288,7 +280,8 @@ def get_args_parser() -> ArgumentParser:
     group.add_argument("--scheduler-factor", type=float, default=0.2)
 
     group = parser.add_argument_group("Training")
-    group.add_argument("--loss", type=str, default="l1", choices=["l1", "l2"])
+    group.add_argument("--loss-type", type=str, default="l1", choices=["l1", "l2"])
+    group.add_argument("--weight-valid", type=float, default=None)
     group.add_argument("--output-path", type=str, required=True) # Path)
     group.add_argument("--epochs", type=int, default=100)
     group.add_argument("--clip-grad-norm", type=float, default=None) # default = 1.0

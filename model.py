@@ -229,7 +229,7 @@ class VGGUNet(Module):
 class LineDetector(Module):
     def __init__(self, size: int, max_distance: float, clamp_output: bool, backbone: BACKBONE):
         super().__init__()
-        self.max_distance = max_distance
+        self.max_distance = max_distance # TODO remove this variable
         self.clamp_output = clamp_output
         self.size = size
         if backbone == BACKBONE.VGG_UNET:
@@ -239,11 +239,12 @@ class LineDetector(Module):
         
         self.head = Sequential(
             Conv2d(size, 1, kernel_size=1),
+            BatchNorm2d(1), # TODO check if it's valid to batch norm at the end
             ReLU(),
         )
 
     def forward(self, x):
         preds = self.head(self.base(x)).squeeze(1)
         if self.clamp_output:
-            preds = torch.clamp(preds, max=self.max_distance)
+            preds = torch.clamp(preds, max=1)
         return preds

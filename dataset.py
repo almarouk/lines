@@ -271,8 +271,9 @@ class _Dataset(Dataset):
             img_out = cv2.distanceTransform(img_out, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
             _, img_out = cv2.threshold(img_out, self._max_distance, None, cv2.THRESH_TRUNC)
             # img_out = np.clip(img_out, 0, max_distance)
+            img_out = img_out / self._max_distance
             if debug:
-                item['transformed_out'] = img_out / self._max_distance
+                item['transformed_out'] = 1 - img_out
             img_out = Tensor(img_out)
 
             item.update({
