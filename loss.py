@@ -48,13 +48,11 @@ class WeightedLoss(Module):
         with torch.no_grad():
             mask = (target < 1).float()
             mask_sum = mask.sum((-1, -2), True)
-            if mask_sum <= 1e-6:
-                mask_sum = 1
+            mask_sum[mask_sum <= 1e-6] = 1
             weights = self.weight_valid * mask / mask_sum
             mask = 1 - mask
             mask_sum = mask.sum((-1, -2), True)
-            if mask_sum <= 1e-6:
-                mask_sum = 1
+            mask_sum[mask_sum <= 1e-6] = 1
             weights += (1 - self.weight_valid) * mask / mask_sum
         loss = self.loss_fn(input, target) * weights
         return self.reduce_fn(loss)
