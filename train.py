@@ -218,7 +218,7 @@ def main(args: Namespace) -> None:
                     model.train(training)
                 writer.add_image(
                     f"Prediction/{tag}/Output",
-                    torch.cat(list(preds / args.max_distance), dim=0),
+                    torch.cat(list(preds), dim=0),
                     global_step,
                     dataformats="HW")
                 # TODO visualize non-reduced loss as heatmap
