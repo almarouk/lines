@@ -18,10 +18,10 @@ def get_loss_fn(
         weight_valid : float = None,
         **kwargs
     ) -> Module:
-    assert weight_valid <= 1 and weight_valid >=0
+    assert weight_valid < 0 or (weight_valid <= 1 and weight_valid >= 0)
     assert reduction in ['mean', 'sum', 'none']
     assert loss_type in _map_loss
-    if weight_valid is None:
+    if weight_valid < 0:
         return _map_loss[loss_type](reduction)
     else:
         return WeightedLoss(loss_type, weight_valid, reduction)

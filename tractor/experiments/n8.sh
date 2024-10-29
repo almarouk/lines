@@ -8,7 +8,7 @@ conda activate /s/apps/users/almarouka/conda/envs/line-detection
 #launch command
 python /s/apps/users/almarouka/line-detection/repo/train.py \
     \
-    --data-path "/s/prods/mvg/_source_global/users/almarouka/datasets/topology_dataset/output/textured/" \
+    --data-path "/s/prods/mvg/_source_global/users/almarouka/datasets/topology_dataset/output/textured/;/s/prods/mvg/_source_global/users/almarouka/datasets/topology_dataset/output/" \
     --to-sdr "scale_max" \
     --batch-size 4 \
     --num-workers 8 \
@@ -23,9 +23,10 @@ python /s/apps/users/almarouka/line-detection/repo/train.py \
     \
     --scheduler none \
     \
-    --loss l1 \
+    --loss-type l1 \
+    --weight-valid 1 \
     --output-path "/s/prods/mvg/_source_global/users/almarouka/training/line-detection/" \
-    --tag "attention_s32_l1_b4_scalemax_clamp_textured" \
+    --tag "attention_s32_l1_1_b4_scalemax_clamp_both" \
     --epochs 50 \
     --clip-grad-norm 1.0 \
     \

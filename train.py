@@ -281,7 +281,7 @@ def get_args_parser() -> ArgumentParser:
 
     group = parser.add_argument_group("Training")
     group.add_argument("--loss-type", type=str, default="l1", choices=["l1", "l2"])
-    group.add_argument("--weight-valid", type=float, default=None)
+    group.add_argument("--weight-valid", type=float, default=-1)
     group.add_argument("--output-path", type=str, required=True) # Path)
     group.add_argument("--epochs", type=int, default=100)
     group.add_argument("--clip-grad-norm", type=float, default=None) # default = 1.0
@@ -368,6 +368,7 @@ if __name__ == '__main__':
 
     args = None
     try:
+        print(torch.cuda.is_available())
         args = get_args_parser().parse_args()
         process_args(args)
         trace_dev(args)

@@ -26,6 +26,10 @@ class BoxesDataset:
 
     def __init__(self, data_path: str, to_sdr: HDR_TO_SDR, max_distance: float, batch_size: int, num_workers: int = 0):
         super().__init__()
+        if ';' in data_path:
+            data_path = data_path.split(';')
+        else:
+            data_path = [data_path]
         self._rootpath = data_path
         self._to_sdr = to_sdr
         self._max_distance = max_distance
@@ -38,18 +42,19 @@ class BoxesDataset:
         for split, scene_ids in self._scene_ids.items():
             split_files = self._files[split] = []
             for id in scene_ids:
-                scene_files = {}
-                _, _, filenames = next(os.walk(os.path.join(self._rootpath, str(id))))
-                for filename in filenames:
-                    view_id, _, suffix = os.path.splitext(filename)[0].rpartition('_')
-                    view_files = scene_files.get(view_id, None)
-                    if not view_files:
-                        view_files = scene_files[view_id] = [''] * 2
-                    if suffix == "beauty":
-                        view_files[0] = os.path.join(str(id), filename)
-                    elif suffix == "wireframe":
-                        view_files[1] = os.path.join(str(id), filename)
-                split_files.extend(scene_files.values())
+                for i, rootpath in enumerate(self._rootpath):
+                    scene_files = {}
+                    _, _, filenames = next(os.walk(os.path.join(rootpath, str(id))))
+                    for filename in filenames:
+                        view_id, _, suffix = os.path.splitext(filename)[0].rpartition('_')
+                        view_files = scene_files.get(view_id, None)
+                        if not view_files:
+                            view_files = scene_files[view_id] = [i, [''] * 2]
+                        if suffix == "beauty":
+                            view_files[1][0] = os.path.join(str(id), filename)
+                        elif suffix == "wireframe":
+                            view_files[1][1] = os.path.join(str(id), filename)
+                    split_files.extend(scene_files.values())
             split_files.sort()
 
     def get_data_loader(self, split: str) -> DataLoader:
@@ -160,7 +165,7 @@ def collate_wrapper(batch: list[list[DATA]]) -> DATA:
 
 class _Dataset(Dataset):
     def __init__(self,
-            files: list[str], root_path: str,
+            files, root_path: list[str],
             to_sdr: HDR_TO_SDR, max_distance: float,
             augment: bool, debug: bool,
             full_image: bool
@@ -205,8 +210,8 @@ class _Dataset(Dataset):
 
         # IMREAD_UNCHANGED to read alpha channel
         flags = cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED
-        filepath_in = os.path.join(self._root_path, self._files[index][0])
-        filepath_out = os.path.join(self._root_path, self._files[index][1])
+        filepath_in = os.path.join(self._root_path[self._files[index][0]], self._files[index][1][0])
+        filepath_out = os.path.join(self._root_path[self._files[index][0]], self._files[index][1][1])
         img_in_ = cv2.cvtColor(cv2.imread(filepath_in, flags), cv2.COLOR_BGRA2RGBA)
         # line information is saved in alpha channel
         img_out_ = cv2.imread(filepath_out, flags)[..., -1]
