@@ -22,7 +22,7 @@ def get_loss_fn(
     assert reduction in ['mean', 'sum', 'none']
     assert loss_type in _map_loss
     if weight_valid < 0:
-        return _map_loss[loss_type](reduction)
+        return _map_loss[loss_type](reduction=reduction)
     else:
         return WeightedLoss(loss_type, weight_valid, reduction)
 
@@ -47,8 +47,14 @@ class WeightedLoss(Module):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         with torch.no_grad():
             mask = (target < 1).float()
-            weights = self.weight_valid * mask / mask.sum((-1, -2), True)
+            mask_sum = mask.sum((-1, -2), True)
+            if mask_sum <= 1e-6:
+                mask_sum = 1
+            weights = self.weight_valid * mask / mask_sum
             mask = 1 - mask
-            weights += (1 - self.weight_valid) * mask / mask.sum((-1, -2), True)
+            mask_sum = mask.sum((-1, -2), True)
+            if mask_sum <= 1e-6:
+                mask_sum = 1
+            weights += (1 - self.weight_valid) * mask / mask_sum
         loss = self.loss_fn(input, target) * weights
         return self.reduce_fn(loss)
