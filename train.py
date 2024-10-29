@@ -368,7 +368,8 @@ if __name__ == '__main__':
 
     args = None
     try:
-        print(torch.cuda.is_available())
+        if not torch.cuda.is_available():
+            raise
         args = get_args_parser().parse_args()
         process_args(args)
         trace_dev(args)
