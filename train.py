@@ -376,9 +376,6 @@ if __name__ == '__main__':
         main(args)
     except:
         if (args is not None and args.suppress_exit) or "--suppress-exit" in sys.argv[1:]:
-            import traceback
-            traceback.print_exc()
-            print("\n---------- The above exception has been suppressed on exit ----------\n")
-            sys.exit(0)
-        else:
-            raise
+            sys.stdout.write("TR_EXIT_STATUS -666")
+            sys.stdout.flush()
+        raise
